@@ -109,7 +109,7 @@ final class JSEngine {
     java.connect=function(u){var b=String(java.ajax(String(u)));return {body:function(){return b},toString:function(){return b}};};
     java.ajaxAll=function(arr){var o=[];for(var i=0;i<arr.length;i++){var b=String(java.ajax(String(arr[i])));o.push({body:function(x){return function(){return x}}(b)});}return o;};
     java.getString=function(r){return (typeof __ruleGetString==='function')?String(__ruleGetString(String(r))):''};
-    java.getStringList=function(r){var s=java.getString(r);return s?s.split('\n'):[]};
+    java.getStringList=function(r){var s=java.getString(r);return s?s.split('\\n'):[]};
     java.getElement=function(r){return (typeof __ruleGetElements==='function')?__ruleGetElements(String(r))[0]:null};
     java.getElements=function(r){return (typeof __ruleGetElements==='function')?__ruleGetElements(String(r)):[]};
     java.setContent=function(c){result=c};
