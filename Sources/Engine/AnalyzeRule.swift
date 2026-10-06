@@ -55,7 +55,7 @@ final class AnalyzeRule {
     }
 
     private func runJS(_ js: String, _ input: Any) -> Any {
-        JSEngine.shared.eval(js, result: AnalyzeRule.jsValue(input), baseUrl: baseUrl, jsLib: jsLib) ?? ""
+        JSEngine.shared.eval(js, result: AnalyzeRule.jsValue(input), baseUrl: baseUrl, jsLib: jsLib, rule: self, ruleInput: input) ?? ""
     }
 
     static func jsValue(_ v: Any) -> Any {

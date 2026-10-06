@@ -103,6 +103,20 @@ final class JSEngine {
     var source={bookSourceUrl:'',bookSourceName:'',bookSourceComment:'',getKey:function(){return this.bookSourceUrl},getVariable:function(){return java.get('__var_'+this.bookSourceUrl)},setVariable:function(v){java.put('__var_'+this.bookSourceUrl,String(v))},put:function(k,v){return java.put(k,String(v))},get:function(k){return java.get(k)}};
     var book={name:'',author:'',bookUrl:'',tocUrl:'',getVariable:function(){return ''},setVariable:function(){}};
     var chapter={title:'',url:'',index:0};
+    java.startBrowserAwait=function(u,t){var b=String(java.ajax(String(u)));return {body:function(){return b},url:function(){return String(u)},toString:function(){return b}};};
+    java.startBrowser=function(u,t){return ''};
+    java.webView=function(h,u,js){return java.ajax(String(u))};
+    java.connect=function(u){var b=String(java.ajax(String(u)));return {body:function(){return b},toString:function(){return b}};};
+    java.ajaxAll=function(arr){var o=[];for(var i=0;i<arr.length;i++){var b=String(java.ajax(String(arr[i])));o.push({body:function(x){return function(){return x}}(b)});}return o;};
+    java.getString=function(r){return (typeof __ruleGetString==='function')?String(__ruleGetString(String(r))):''};
+    java.getStringList=function(r){var s=java.getString(r);return s?s.split('\n'):[]};
+    java.getElement=function(r){return (typeof __ruleGetElements==='function')?__ruleGetElements(String(r))[0]:null};
+    java.getElements=function(r){return (typeof __ruleGetElements==='function')?__ruleGetElements(String(r)):[]};
+    java.setContent=function(c){result=c};
+    java.getCookie=function(){return ''};
+    java.utf8ToGbk=function(s){return s};
+    java.t2s=function(s){return s};java.s2t=function(s){return s};
+    java.randomUUID=function(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return (c=='x'?r:(r&3|8)).toString(16)})};
     """
 
     private func makeContext() -> JSContext {
@@ -114,14 +128,23 @@ final class JSEngine {
             src.setObject(s.bookSourceUrl, forKeyedSubscript: "bookSourceUrl" as NSString)
             src.setObject(s.bookSourceName, forKeyedSubscript: "bookSourceName" as NSString)
             src.setObject(s.bookSourceComment ?? "", forKeyedSubscript: "bookSourceComment" as NSString)
+            ctx.objectForKeyedSubscript("book")?.setObject(s.bookSourceUrl, forKeyedSubscript: "origin" as NSString)
         }
         return ctx
     }
 
     /// Evaluate a JS snippet with `result`, `baseUrl`, `book`, `key`, `page` in scope.
     func eval(_ script: String, result: Any? = nil, baseUrl: String? = nil,
-              vars: [String: Any] = [:], jsLib: String? = nil) -> Any? {
+              vars: [String: Any] = [:], jsLib: String? = nil,
+              rule: AnalyzeRule? = nil, ruleInput: Any? = nil) -> Any? {
         let ctx = makeContext()
+        if let r = rule {
+            let input = ruleInput
+            let gs: @convention(block) (String) -> String = { s in r.getString(s, from: input) }
+            let ge: @convention(block) (String) -> [Any] = { s in r.getElements(s, from: input).map { AnalyzeRule.jsValue($0) } }
+            ctx.setObject(gs, forKeyedSubscript: "__ruleGetString" as NSString)
+            ctx.setObject(ge, forKeyedSubscript: "__ruleGetElements" as NSString)
+        }
         if let lib = jsLib, !lib.isEmpty, !lib.hasPrefix("{") { ctx.evaluateScript(lib) }
         ctx.setObject(result ?? "", forKeyedSubscript: "result" as NSString)
         ctx.setObject(baseUrl ?? "", forKeyedSubscript: "baseUrl" as NSString)
