@@ -8,9 +8,6 @@ import JavaScriptCore
     var body: String { get }
     var code: Int { get }
     var length: Int { get }
-    func body() -> String
-    func url() -> String
-    func code() -> Int
     func toString() -> String
     func valueOf() -> String
     func match(_ pattern: String) -> JSValue?
@@ -26,7 +23,6 @@ import JavaScriptCore
     private let _body: String
     private let _code: Int
     private let _headers: [String: String]
-    private weak var context: JSContext?
     
     init(url: String, body: String, code: Int = 200, headers: [String: String] = [:]) {
         self._url = url
@@ -41,11 +37,6 @@ import JavaScriptCore
     @objc var body: String { _body }
     @objc var code: Int { _code }
     @objc var length: Int { _body.count }
-    
-    // Method accessors for JS (e.g. response.url(), response.body(), response.code())
-    @objc func url() -> String { _url }
-    @objc func body() -> String { _body }
-    @objc func code() -> Int { _code }
     
     // Make the object stringify-able in JS (implicit conversion when used as string)
     @objc func toString() -> String { _body }
@@ -102,20 +93,5 @@ import JavaScriptCore
          .replacingOccurrences(of: "'", with: "\\'")
          .replacingOccurrences(of: "\n", with: "\\n")
          .replacingOccurrences(of: "\r", with: "\\r")
-    }
-}
-
-// Extension to convert URLResponse + body into StrResponse
-extension StrResponse {
-    convenience init(response: URLResponse?, body: String) {
-        let http = response as? HTTPURLResponse
-        let url = response?.url?.absoluteString ?? ""
-        let code = http?.statusCode ?? 200
-        let headers = http?.allHeaderFields.reduce(into: [:]) { result, pair in
-            if let key = pair.key as? String, let value = pair.value as? String {
-                result[key] = value
-            }
-        } ?? [:]
-        self.init(url: url, body: body, code: code, headers: headers)
     }
 }

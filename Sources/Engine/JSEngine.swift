@@ -29,14 +29,15 @@ import CommonCrypto
 
     func ajax(_ url: String) -> StrResponse {
         let sem = DispatchSemaphore(value: 0)
-        var result: (String, URLResponse?) = ("", nil)
+        var result: (String, String) = ("", "")
         let au = AnalyzeUrl(rawUrl: url)
         Task.detached {
-            result = (try? await au.fetch()) ?? ("", nil)
+            result = (try? await au.fetch()) ?? ("", "")
             sem.signal()
         }
         _ = sem.wait(timeout: .now() + 25)
-        return StrResponse(response: result.1, body: result.0)
+        // result.0 = body, result.1 = final URL
+        return StrResponse(url: result.1.isEmpty ? url : result.1, body: result.0)
     }
     
     func connect(_ url: String) -> StrResponse {
