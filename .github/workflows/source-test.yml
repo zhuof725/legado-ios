@@ -1,0 +1,64 @@
+name: Source test
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      key:
+        description: 搜索关键词
+        default: 斗罗大陆
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          X=$(ls -d /Applications/Xcode_1[6-9]*.app /Applications/Xcode_2*.app 2>/dev/null | sort -V | tail -n 1)
+          [ -n "$X" ] && sudo xcode-select -s "$X"
+          swift --version
+
+      - name: Prepare package
+        run: |
+          P=$RUNNER_TEMP/pkg
+          mkdir -p $P/Sources/SourceTest
+          cp Sources/Engine/*.swift Sources/Models/*.swift $P/Sources/SourceTest/
+          cp Tools/SourceTest/main.swift $P/Sources/SourceTest/
+          cat > $P/Package.swift <<'EOF'
+          // swift-tools-version:5.9
+          import PackageDescription
+          let package = Package(
+            name: "SourceTest",
+            platforms: [.macOS(.v13)],
+            dependencies: [.package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.7.0")],
+            targets: [.executableTarget(name: "SourceTest", dependencies: ["SwiftSoup"])]
+          )
+          EOF
+          sed -i '' 's/^          //' $P/Package.swift
+          cat $P/Package.swift
+
+      - name: Build
+        run: |
+          cd $RUNNER_TEMP/pkg
+          swift build -c release 2>&1 | tee $GITHUB_WORKSPACE/test-build.log
+
+      - name: Download sources
+        run: curl -sSL --retry 3 https://cdn.jsdelivr.net/gh/XIU2/Yuedu@master/shuyuan -o sources.json && ls -la sources.json
+
+      - name: Run test
+        run: |
+          KEY="${{ github.event.inputs.key }}"
+          [ -z "$KEY" ] && KEY=斗罗大陆
+          $RUNNER_TEMP/pkg/.build/release/SourceTest sources.json "$KEY" 60 2>&1 | tee source-test.log
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-test-log
+          path: |
+            source-test.log
+            test-build.log
