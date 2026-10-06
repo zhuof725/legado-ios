@@ -1,8 +1,10 @@
 import Foundation
 import JavaScriptCore
 
-/// Swift equivalent of Legado's StrResponse, exposed to JS.
-/// Must be a class (not struct) to work with JSExport.
+/// Legado `StrResponse` 的 iOS 对应类型。
+/// 原版在 JS 中通过 body()、url、code、header() 使用它；
+/// JavaScriptCore 的方法名不能同时与 Swift 属性重名，因此 body()/url()
+/// 由 JSEngine 的 JS 包装层提供，原生对象保留属性。
 @objc protocol StrResponseExports: JSExport {
     var url: String { get }
     var body: String { get }
@@ -10,88 +12,41 @@ import JavaScriptCore
     var length: Int { get }
     func toString() -> String
     func valueOf() -> String
-    func match(_ pattern: String) -> JSValue?
-    func replace(_ pattern: String, _ replacement: String) -> String
-    func split(_ separator: String) -> [String]
-    func substring(_ start: Int, _ end: Int) -> String
-    func indexOf(_ searchString: String) -> Int
-    func trim() -> String
+    func header(_ name: String) -> String
+    func cookie(_ name: String) -> String
 }
 
 @objc final class StrResponse: NSObject, StrResponseExports {
-    private let _url: String
-    private let _body: String
-    private let _code: Int
-    private let _headers: [String: String]
-    
+    let url: String
+    let body: String
+    let code: Int
+    let length: Int
+    private let headers: [String: String]
+
     init(url: String, body: String, code: Int = 200, headers: [String: String] = [:]) {
-        self._url = url
-        self._body = body
-        self._code = code
-        self._headers = headers
+        self.url = url
+        self.body = body
+        self.code = code
+        self.length = body.count
+        self.headers = headers
         super.init()
     }
-    
-    // Property accessors for JS (e.g. response.url, response.body, response.code)
-    @objc var url: String { _url }
-    @objc var body: String { _body }
-    @objc var code: Int { _code }
-    @objc var length: Int { _body.count }
-    
-    // Make the object stringify-able in JS (implicit conversion when used as string)
-    @objc func toString() -> String { _body }
-    @objc func valueOf() -> String { _body }
-    
-    // String methods that book sources might call on the response object
-    @objc func match(_ pattern: String) -> JSValue? {
-        let ctx = JSContext.current()
-        let script = """
-        (function(str, pattern) {
-            try {
-                var m = pattern.match(/^\\/(.*)\\/([gimuy]*)$/);
-                if (m) return str.match(new RegExp(m[1], m[2]));
-                return str.match(pattern);
-            } catch(e) { return null; }
-        })('\(escapeJS(_body))', '\(escapeJS(pattern))');
-        """
-        return ctx?.evaluateScript(script)
+
+    @objc func toString() -> String { body }
+    @objc func valueOf() -> String { body }
+
+    @objc func header(_ name: String) -> String {
+        headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value ?? ""
     }
-    
-    @objc func replace(_ pattern: String, _ replacement: String) -> String {
-        _body.replacingOccurrences(of: pattern, with: replacement)
-    }
-    
-    @objc func split(_ separator: String) -> [String] {
-        _body.components(separatedBy: separator)
-    }
-    
-    @objc func substring(_ start: Int, _ end: Int) -> String {
-        let s = _body
-        let startIdx = s.index(s.startIndex, offsetBy: max(0, start), limitedBy: s.endIndex) ?? s.startIndex
-        let endIdx = s.index(s.startIndex, offsetBy: min(s.count, end), limitedBy: s.endIndex) ?? s.endIndex
-        return String(s[startIdx..<endIdx])
-    }
-    
-    @objc func indexOf(_ searchString: String) -> Int {
-        if let range = _body.range(of: searchString) {
-            return _body.distance(from: _body.startIndex, to: range.lowerBound)
+
+    @objc func cookie(_ name: String) -> String {
+        let raw = header("Set-Cookie")
+        for item in raw.split(separator: ";") {
+            let pair = item.split(separator: "=", maxSplits: 1).map(String.init)
+            if pair.count == 2 && pair[0].trimmingCharacters(in: .whitespaces) == name {
+                return pair[1].trimmingCharacters(in: .whitespaces)
+            }
         }
-        return -1
-    }
-    
-    @objc func trim() -> String {
-        _body.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    
-    // Expose headers if needed by advanced rules
-    func header(_ name: String) -> String? {
-        _headers.first(where: { $0.key.caseInsensitiveCompare(name) == .orderedSame })?.value
-    }
-    
-    private func escapeJS(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\")
-         .replacingOccurrences(of: "'", with: "\\'")
-         .replacingOccurrences(of: "\n", with: "\\n")
-         .replacingOccurrences(of: "\r", with: "\\r")
+        return ""
     }
 }

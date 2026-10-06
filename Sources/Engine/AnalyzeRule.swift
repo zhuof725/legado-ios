@@ -6,10 +6,12 @@ final class AnalyzeRule {
     let content: Any
     let baseUrl: String
     let jsLib: String?
+    let context: RuleContext
 
-    init(content: Any, baseUrl: String, jsLib: String? = nil) {
+    init(content: Any, baseUrl: String, jsLib: String? = nil, context: RuleContext = RuleContext()) {
         self.baseUrl = baseUrl
         self.jsLib = jsLib
+        self.context = context
         if let s = content as? String {
             self.content = AnalyzeRule.parse(s, baseUrl: baseUrl)
         } else {
@@ -55,7 +57,7 @@ final class AnalyzeRule {
     }
 
     private func runJS(_ js: String, _ input: Any) -> Any {
-        JSEngine.shared.eval(js, result: AnalyzeRule.jsValue(input), baseUrl: baseUrl, jsLib: jsLib, rule: self, ruleInput: input) ?? ""
+        JSEngine.shared.eval(js, result: AnalyzeRule.jsValue(input), baseUrl: baseUrl, jsLib: jsLib, rule: self, ruleInput: input, context: context) ?? ""
     }
 
     static func jsValue(_ v: Any) -> Any {

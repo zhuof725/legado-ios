@@ -55,7 +55,7 @@ for s in sources {
             let chapters = try await WebBook.chapters(source: s, book: info)
             print("  目录: \(chapters.count) 章, 第一章: \(short(chapters.first?.title)) \(short(chapters.first?.url, 120))")
             guard let c = chapters.first else { return "目录0章" }
-            let text = try await WebBook.content(source: s, chapter: c, nextChapterUrl: chapters.count > 1 ? chapters[1].url : nil)
+            let text = try await WebBook.content(source: s, chapter: c, nextChapterUrl: chapters.count > 1 ? chapters[1].url : nil, book: info)
             print("  正文: \(text.count) 字符, 开头: \(short(text, 100))")
             return text.isEmpty ? "正文为空" : "OK(正文\(text.count)字)"
         }

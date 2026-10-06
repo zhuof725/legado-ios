@@ -11,11 +11,14 @@ struct AnalyzeUrl {
     var webView: Bool = false
     /// ruleContent.webJs：WebView 加载后执行的 JS
     var webJs: String?
+    let context: RuleContext?
 
-    init(rawUrl: String, key: String? = nil, page: Int = 1, baseUrl: String? = nil, sourceHeader: String? = nil) {
+    init(rawUrl: String, key: String? = nil, page: Int = 1, baseUrl: String? = nil,
+         sourceHeader: String? = nil, context: RuleContext? = nil) {
+        self.context = context
         var s = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         // @js: / <js></js> 先执行，再做模板替换（与 Legado 一致）
-        s = AnalyzeUrl.evalUrlJS(s, key: key, page: page, baseUrl: baseUrl)
+        s = AnalyzeUrl.evalUrlJS(s, key: key, page: page, baseUrl: baseUrl, context: context)
         s = AnalyzeUrl.substitute(s, key: key, page: page)
         // <1,2,3> page selection
         if let r = s.range(of: "<[^>]+>", options: .regularExpression) {
@@ -61,13 +64,13 @@ struct AnalyzeUrl {
     }
 
     /// 执行 URL 规则里的 @js: 和 <js></js>，返回最终的 URL 字符串
-    static func evalUrlJS(_ raw: String, key: String?, page: Int, baseUrl: String?) -> String {
+    static func evalUrlJS(_ raw: String, key: String?, page: Int, baseUrl: String?, context: RuleContext? = nil) -> String {
         guard raw.contains("<js>") || raw.range(of: "@js:", options: .caseInsensitive) != nil else { return raw }
         var result = ""
         var rest = raw
         let vars: [String: Any] = ["key": key ?? "", "page": page, "searchKey": key ?? "", "searchPage": page]
         func run(_ js: String) {
-            let v = JSEngine.shared.eval(js, result: result, baseUrl: baseUrl ?? "", vars: vars)
+            let v = JSEngine.shared.eval(js, result: result, baseUrl: baseUrl ?? "", vars: vars, context: context)
             result = v.map { AnalyzeRule.asString($0) } ?? ""
         }
         while let r = rest.range(of: "<js>") {
@@ -102,7 +105,7 @@ struct AnalyzeUrl {
         for m in re.matches(in: out, range: NSRange(location: 0, length: ns.length)).reversed() {
             let expr = ns.substring(with: m.range(at: 1)).replacingOccurrences(of: "page", with: "\(page)")
                 .replacingOccurrences(of: "key", with: "'\(k)'")
-            let v = JSEngine.shared.evalString(expr) ?? ""
+            let v = JSEngine.shared.evalString(expr, context: nil) ?? ""
             result = (result as NSString).replacingCharacters(in: m.range, with: v)
         }
         return result

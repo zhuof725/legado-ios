@@ -261,7 +261,7 @@ struct ReaderView: View {
         text = ""
         do {
             let next = index + 1 < chapters.count ? chapters[index + 1].url : nil
-            let t = try await WebBook.content(source: s, chapter: c, nextChapterUrl: next)
+            let t = try await WebBook.content(source: s, chapter: c, nextChapterUrl: next, book: book)
             text = t.isEmpty ? "（正文为空，书源可能不兼容）" : t
             store.saveContent(c, t)
         } catch {
@@ -278,7 +278,7 @@ struct ReaderView: View {
         if store.cachedContent(c) != nil { return }
         let next = i + 1 < chapters.count ? chapters[i + 1].url : nil
         Task {
-            if let t = try? await WebBook.content(source: s, chapter: c, nextChapterUrl: next) { store.saveContent(c, t) }
+            if let t = try? await WebBook.content(source: s, chapter: c, nextChapterUrl: next, book: book) { store.saveContent(c, t) }
         }
     }
 }
