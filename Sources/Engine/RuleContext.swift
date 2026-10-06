@@ -13,6 +13,10 @@ final class RuleContext {
         self.source = source
         self.book = book
         self.chapter = chapter
+        if let raw = source?.bookSourceUrl {
+            variables["host"] = raw.components(separatedBy: "#").first ?? raw
+            variables["baseUrl"] = raw
+        }
     }
 
     func put(_ key: String, _ value: String) -> String {

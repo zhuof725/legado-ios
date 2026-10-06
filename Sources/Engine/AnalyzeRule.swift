@@ -57,7 +57,30 @@ final class AnalyzeRule {
     }
 
     private func runJS(_ js: String, _ input: Any) -> Any {
-        JSEngine.shared.eval(js, result: AnalyzeRule.jsValue(input), baseUrl: baseUrl, jsLib: jsLib, rule: self, ruleInput: input, context: context) ?? ""
+        let expanded = expandEmbeddedTemplates(js, input: input)
+        return JSEngine.shared.eval(expanded, result: AnalyzeRule.jsValue(input), baseUrl: baseUrl, jsLib: jsLib, rule: self, ruleInput: input, context: context) ?? ""
+    }
+
+    /// Legado 会在执行 @js:/<js> 前先展开其中的 {{规则}}。
+    /// 例如 `{{$.bid}}` 必须从当前 JSON 节点取值，而不能直接交给 JSCore 解析。
+    private func expandEmbeddedTemplates(_ script: String, input: Any) -> String {
+        guard let re = try? NSRegularExpression(pattern: "\\{\\{([\\s\\S]*?)\\}\\}") else { return script }
+        var output = script
+        let ns = script as NSString
+        for match in re.matches(in: script, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let expression = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let value: String
+            if expression == "baseUrl" { value = baseUrl }
+            else if expression == "host" { value = context.get("host") }
+            else if expression.hasPrefix("@get:") { value = context.get(String(expression.dropFirst(5))) }
+            else if expression.hasPrefix("@") || expression.hasPrefix("$." ) || expression.hasPrefix("$[") || expression.hasPrefix("//") {
+                value = singleString(input, expression.hasPrefix("@@") ? String(expression.dropFirst(2)) : expression)
+            } else {
+                value = AnalyzeRule.asString(JSEngine.shared.eval(expression, result: AnalyzeRule.jsValue(input), baseUrl: baseUrl, context: context) ?? "")
+            }
+            output = (output as NSString).replacingCharacters(in: match.range, with: value)
+        }
+        return output
     }
 
     static func jsValue(_ v: Any) -> Any {
@@ -279,7 +302,15 @@ final class AnalyzeRule {
         if seg.hasPrefix("."), seg.dropFirst().range(of: "^!?[-0-9:]+$", options: .regularExpression) != nil {
             return AnalyzeRule.pickIndexes(el.children().array(), String(seg.dropFirst()))
         }
-        var parts = seg.components(separatedBy: ".")
+        // 教程兼容：tag.dd!0:1:2 与 tag.dd.!0:1:2 都表示排除索引。
+        var normalized = seg
+        if let bang = normalized.firstIndex(of: "!") {
+            let base = String(normalized[..<bang])
+            if !base.hasSuffix(".") {
+                normalized = base + "." + String(normalized[bang...])
+            }
+        }
+        var parts = normalized.components(separatedBy: ".")
         let type = parts.removeFirst()
         var list: [Element]
         switch type {

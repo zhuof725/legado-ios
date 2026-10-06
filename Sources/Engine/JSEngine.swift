@@ -165,10 +165,19 @@ final class JSEngine {
     var book={name:'',author:'',bookUrl:'',tocUrl:'',getVariable:function(){return ''},setVariable:function(){}};
     var chapter={title:'',url:'',index:0};
     var Packages={org:{jsoup:{Jsoup:{parse:function(html){
-        var root={select:function(q){
+        function listFor(q){
             var arr=typeof __ruleGetElements==='function'?__ruleGetElements('@css:'+q):[];
-            return {size:function(){return arr.length},get:function(i){return arr[i]},toArray:function(){return arr},length:arr.length};
-        },text:function(){return String(html)},html:function(){return String(html)},toString:function(){return String(html)}};
+            arr.size=function(){return arr.length};
+            arr.get=function(i){return arr[i]};
+            arr.toArray=function(){return arr};
+            arr.text=function(){return arr.map(function(x){return x&&x.text?x.text():String(x)}).join(' ')};
+            arr.attr=function(k){var x=arr[0];return x&&x.attr?x.attr(k):''};
+            arr.html=function(){var x=arr[0];return x&&x.html?x.html():''};
+            arr.outerHtml=function(){var x=arr[0];return x&&x.outerHtml?x.outerHtml():''};
+            arr.remove=function(){return arr};
+            return arr;
+        }
+        var root={select:function(q){return listFor(q)},text:function(){return String(html)},html:function(){return String(html)},toString:function(){return String(html)}};
         return root;
     }}}}};
     function __response(r){
