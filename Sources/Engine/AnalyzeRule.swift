@@ -152,12 +152,34 @@ final class AnalyzeRule {
 
     // MARK: - String rules
 
+    private func topLevelRegexMarker(in s: String) -> Range<String.Index>? {
+        var i = s.startIndex
+        var templateDepth = 0
+        while i < s.endIndex {
+            if s[i...].hasPrefix("{{") {
+                templateDepth += 1
+                i = s.index(i, offsetBy: 2)
+                continue
+            }
+            if s[i...].hasPrefix("}}") {
+                templateDepth = max(0, templateDepth - 1)
+                i = s.index(i, offsetBy: 2)
+                continue
+            }
+            if templateDepth == 0 && s[i...].hasPrefix("##") {
+                return i..<s.index(i, offsetBy: 2)
+            }
+            i = s.index(after: i)
+        }
+        return nil
+    }
+
     private func stringValue(_ obj: Any, _ rawRule: String) -> String {
-        // 模板中的 ##（如 {{$.docId##.*_}}）必须先在模板内部处理，
-        // 不能被误判成整条 URL/正文规则的净化表达式。
-        var rule = rawRule.contains("{{") ? template(obj, rawRule) : rawRule
+        // 模板内部的 ##（如 {{$.docId##.*_}}）由 template() 单独处理；
+        // 整条 URL/正文规则仍要保留原始模板分支，避免把 URL 当成 CSS 规则。
+        var rule = rawRule
         var regex: String? = nil, repl = "", firstOnly = false
-        if let r = rule.range(of: "##") {
+        if let r = topLevelRegexMarker(in: rule) {
             let tail = String(rule[r.upperBound...])
             rule = String(rule[..<r.lowerBound])
             var segs = tail.components(separatedBy: "##")
