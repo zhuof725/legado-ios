@@ -1,0 +1,364 @@
+import Foundation
+import SwiftSoup
+
+/// Legado-compatible rule analyzer: default JSoup syntax, @css:, @json:/$., @js:/<js>, ##regex, ||, &&, {{}}.
+final class AnalyzeRule {
+    let content: Any
+    let baseUrl: String
+    let jsLib: String?
+
+    init(content: Any, baseUrl: String, jsLib: String? = nil) {
+        self.baseUrl = baseUrl
+        self.jsLib = jsLib
+        if let s = content as? String {
+            self.content = AnalyzeRule.parse(s, baseUrl: baseUrl)
+        } else {
+            self.content = content
+        }
+    }
+
+    static func parse(_ s: String, baseUrl: String) -> Any {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.hasPrefix("{") || t.hasPrefix("["), let d = t.data(using: .utf8),
+           let o = try? JSONSerialization.jsonObject(with: d, options: [.fragmentsAllowed]) {
+            return o
+        }
+        if let doc = try? SwiftSoup.parse(s, baseUrl) { return doc }
+        return s
+    }
+
+    // MARK: - JS splitting
+
+    private func splitJS(_ rule: String) -> [(Bool, String)] {
+        var parts: [(Bool, String)] = []
+        var rest = rule
+        while let r = rest.range(of: "<js>") {
+            let before = String(rest[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !before.isEmpty { parts.append((false, before)) }
+            let after = rest[r.upperBound...]
+            if let e = after.range(of: "</js>") {
+                parts.append((true, String(after[..<e.lowerBound])))
+                rest = String(after[e.upperBound...])
+            } else {
+                parts.append((true, String(after))); rest = ""
+            }
+        }
+        if let r = rest.range(of: "@js:", options: .caseInsensitive) {
+            let before = String(rest[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !before.isEmpty { parts.append((false, before)) }
+            parts.append((true, String(rest[r.upperBound...])))
+        } else {
+            let t = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { parts.append((false, t)) }
+        }
+        return parts
+    }
+
+    private func runJS(_ js: String, _ input: Any) -> Any {
+        JSEngine.shared.eval(js, result: AnalyzeRule.jsValue(input), baseUrl: baseUrl, jsLib: jsLib) ?? ""
+    }
+
+    static func jsValue(_ v: Any) -> Any {
+        if let e = v as? Element { return (try? e.outerHtml()) ?? "" }
+        if let a = v as? [Any] { return a.map { jsValue($0) } }
+        return v
+    }
+
+    // MARK: - Public API
+
+    func getString(_ rule: String?, from obj: Any? = nil) -> String {
+        guard let rule = rule, !rule.isEmpty else { return "" }
+        var cur: Any = obj ?? content
+        for (isJs, s) in splitJS(rule) {
+            if isJs { cur = runJS(s, cur) }
+            else {
+                if let str = cur as? String, cur as AnyObject !== content as AnyObject { cur = AnalyzeRule.parse(str, baseUrl: baseUrl) }
+                cur = stringValue(cur, s)
+            }
+        }
+        return AnalyzeRule.asString(cur).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func getElements(_ rule: String?, from obj: Any? = nil) -> [Any] {
+        guard let rule = rule, !rule.isEmpty else { return [] }
+        var cur: Any = obj ?? content
+        for (isJs, s) in splitJS(rule) {
+            if isJs { cur = runJS(s, cur) }
+            else {
+                if let str = cur as? String { cur = AnalyzeRule.parse(str, baseUrl: baseUrl) }
+                cur = elementsValue(cur, s)
+            }
+        }
+        if let a = cur as? [Any] { return a }
+        if let s = cur as? String {
+            let p = AnalyzeRule.parse(s, baseUrl: baseUrl)
+            if let a = p as? [Any] { return a }
+            return [p]
+        }
+        return [cur]
+    }
+
+    // MARK: - String rules
+
+    private func stringValue(_ obj: Any, _ rawRule: String) -> String {
+        var rule = rawRule
+        var regex: String? = nil, repl = "", firstOnly = false
+        if let r = rule.range(of: "##") {
+            let tail = String(rule[r.upperBound...])
+            rule = String(rule[..<r.lowerBound])
+            var segs = tail.components(separatedBy: "##")
+            regex = segs.removeFirst()
+            if !segs.isEmpty { repl = segs.removeFirst() }
+            if tail.hasSuffix("###") { firstOnly = true }
+        }
+        var out: String
+        if rule.contains("{{") {
+            out = template(obj, rule)
+        } else if rule.contains("||") {
+            out = ""
+            for r in rule.components(separatedBy: "||") {
+                let v = singleString(obj, r); if !v.isEmpty { out = v; break }
+            }
+        } else if rule.contains("&&") {
+            out = rule.components(separatedBy: "&&").map { singleString(obj, $0) }.filter { !$0.isEmpty }.joined(separator: "\n")
+        } else if rule.contains("{$.") {
+            out = replaceBraces(rule, pattern: "\\{(\\$\\.[^}]+)\\}") { self.singleString(obj, $0) }
+        } else {
+            out = rule.isEmpty ? AnalyzeRule.asString(obj) : singleString(obj, rule)
+        }
+        if let re = regex, !re.isEmpty, let nre = try? NSRegularExpression(pattern: re) {
+            let ns = out as NSString
+            if firstOnly {
+                if let m = nre.firstMatch(in: out, range: NSRange(location: 0, length: ns.length)) {
+                    out = nre.replacementString(for: m, in: out, offset: 0, template: repl)
+                } else { out = "" }
+            } else {
+                out = nre.stringByReplacingMatches(in: out, range: NSRange(location: 0, length: ns.length), withTemplate: repl)
+            }
+        }
+        return out
+    }
+
+    private func template(_ obj: Any, _ rule: String) -> String {
+        replaceBraces(rule, pattern: "\\{\\{([\\s\\S]*?)\\}\\}") { inner in
+            let t = inner.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("@") || t.hasPrefix("$.") || t.hasPrefix("//") {
+                return self.singleString(obj, t.hasPrefix("@@") ? String(t.dropFirst(2)) : t)
+            }
+            return AnalyzeRule.asString(self.runJS(t, obj))
+        }
+    }
+
+    private func replaceBraces(_ s: String, pattern: String, _ f: (String) -> String) -> String {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return s }
+        var result = s
+        let ns = s as NSString
+        for m in re.matches(in: s, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let v = f(ns.substring(with: m.range(at: 1)))
+            result = (result as NSString).replacingCharacters(in: m.range, with: v)
+        }
+        return result
+    }
+
+    private func singleString(_ obj: Any, _ r: String) -> String {
+        let rule = r.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rule.isEmpty { return "" }
+        if isJsonRule(rule, obj) {
+            return JsonPath.query(jsonRoot(obj), stripPrefix(rule)).map { AnalyzeRule.asString($0) }.joined(separator: "\n")
+        }
+        if rule.lowercased().hasPrefix("@xpath:") || rule.hasPrefix("//") { return "" }
+        let isCss = rule.lowercased().hasPrefix("@css:")
+        let body = isCss ? String(rule.dropFirst(5)) : rule
+        guard let idx = body.range(of: "@", options: .backwards) else {
+            // only attribute or only selector
+            if let el = AnalyzeRule.element(obj) {
+                if isCss { return elementsText((try? el.select(body).array()) ?? [], "text") }
+                return elementsText([el], body)
+            }
+            return AnalyzeRule.asString(obj)
+        }
+        let sel = String(body[..<idx.lowerBound])
+        let attr = String(body[idx.upperBound...])
+        let els: [Element]
+        if isCss { els = (try? AnalyzeRule.element(obj)?.select(sel).array()) ?? [] }
+        else { els = defaultElements(obj, sel) }
+        return elementsText(els, attr)
+    }
+
+    private func elementsText(_ els: [Element], _ attr: String) -> String {
+        els.compactMap { e -> String? in
+            switch attr {
+            case "text": return try? e.text()
+            case "ownText": return e.ownText()
+            case "textNodes": return e.textNodes().map { $0.text() }.joined(separator: "\n")
+            case "html":
+                _ = try? e.select("script,style").remove()
+                return try? e.html()
+            case "all": return try? e.outerHtml()
+            default: return try? e.attr(attr)
+            }
+        }.filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
+    // MARK: - Element rules
+
+    private func elementsValue(_ obj: Any, _ r: String) -> [Any] {
+        let rule = r.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rule.contains("||") {
+            for x in rule.components(separatedBy: "||") { let v = elementsValue(obj, x); if !v.isEmpty { return v } }
+            return []
+        }
+        if rule.contains("&&") { return rule.components(separatedBy: "&&").flatMap { elementsValue(obj, $0) } }
+        var main = rule, reverse = false
+        if main.hasPrefix("-") { reverse = true; main.removeFirst() }
+        var res: [Any]
+        if isJsonRule(main, obj) {
+            res = JsonPath.query(jsonRoot(obj), stripPrefix(main)).flatMap { ($0 as? [Any]) ?? [$0] }
+        } else if main.lowercased().hasPrefix("@css:") {
+            res = (try? AnalyzeRule.element(obj)?.select(String(main.dropFirst(5))).array()) ?? []
+        } else {
+            res = defaultElements(obj, main)
+        }
+        return reverse ? res.reversed() : res
+    }
+
+    private func defaultElements(_ obj: Any, _ rule: String) -> [Element] {
+        guard let root = AnalyzeRule.element(obj) else { return [] }
+        var cur: [Element] = [root]
+        for seg in rule.components(separatedBy: "@") where !seg.isEmpty {
+            cur = cur.flatMap { applySegment($0, seg) }
+        }
+        return cur
+    }
+
+    private func applySegment(_ el: Element, _ seg: String) -> [Element] {
+        var parts = seg.components(separatedBy: ".")
+        let type = parts.removeFirst()
+        var list: [Element]
+        switch type {
+        case "class": list = (try? el.getElementsByClass(parts.first ?? "").array()) ?? []
+        case "tag": list = (try? el.getElementsByTag(parts.first ?? "").array()) ?? []
+        case "id":
+            if let found = ((try? el.getElementById(parts.first ?? "")) ?? nil) { list = [found] } else { list = [] }
+        case "text": list = (try? el.getElementsContainingOwnText(parts.first ?? "").array()) ?? []
+        case "children": list = el.children().array()
+        default: return (try? el.select(seg).array()) ?? []
+        }
+        if type != "children" && !parts.isEmpty { parts.removeFirst() }
+        guard let idxStr = parts.first, !idxStr.isEmpty else { return list }
+        if idxStr.hasPrefix("!") {
+            let ex = Set(idxStr.dropFirst().split(separator: ":").compactMap { Int($0) }.map { $0 < 0 ? list.count + $0 : $0 })
+            return list.enumerated().filter { !ex.contains($0.offset) }.map { $0.element }
+        }
+        let idxs = idxStr.split(separator: ":").compactMap { Int($0) }
+        return idxs.compactMap { i in
+            let j = i < 0 ? list.count + i : i
+            return (j >= 0 && j < list.count) ? list[j] : nil
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func isJsonRule(_ rule: String, _ obj: Any) -> Bool {
+        let l = rule.lowercased()
+        if l.hasPrefix("@json:") || rule.hasPrefix("$.") || rule.hasPrefix("$[") { return true }
+        if l.hasPrefix("@css:") || l.hasPrefix("@xpath:") { return false }
+        return obj is [String: Any] || obj is [Any]
+    }
+
+    private func stripPrefix(_ r: String) -> String {
+        r.lowercased().hasPrefix("@json:") ? String(r.dropFirst(6)) : r
+    }
+
+    private func jsonRoot(_ obj: Any) -> Any {
+        if let s = obj as? String { return AnalyzeRule.parse(s, baseUrl: baseUrl) }
+        if let e = obj as? Element, let t = try? e.text() { return AnalyzeRule.parse(t, baseUrl: baseUrl) }
+        return obj
+    }
+
+    static func element(_ obj: Any) -> Element? {
+        if let e = obj as? Element { return e }
+        if let s = obj as? String { return try? SwiftSoup.parse(s) }
+        return nil
+    }
+
+    static func asString(_ v: Any) -> String {
+        switch v {
+        case let s as String: return s
+        case let e as Element: return (try? e.text()) ?? ""
+        case let n as NSNumber: return n.stringValue
+        case let a as [Any]: return a.map { asString($0) }.joined(separator: "\n")
+        case is NSNull: return ""
+        default:
+            if JSONSerialization.isValidJSONObject(v), let d = try? JSONSerialization.data(withJSONObject: v) {
+                return String(data: d, encoding: .utf8) ?? ""
+            }
+            return "\(v)"
+        }
+    }
+}
+
+/// Minimal JSONPath: $.a.b, $..a, [n], [-1], [*], ['k'], .*
+enum JsonPath {
+    static func query(_ root: Any, _ path: String) -> [Any] {
+        var p = path.trimmingCharacters(in: .whitespaces)
+        if p.hasPrefix("$") { p.removeFirst() }
+        var cur: [Any] = [root]
+        var i = p.startIndex
+        while i < p.endIndex {
+            if p[i...].hasPrefix("..") {
+                i = p.index(i, offsetBy: 2)
+                let key = readKey(p, &i)
+                cur = cur.flatMap { deep($0, key) }
+            } else if p[i] == "." {
+                i = p.index(after: i)
+                let key = readKey(p, &i)
+                cur = cur.flatMap { child($0, key) }
+            } else if p[i] == "[" {
+                guard let end = p[i...].firstIndex(of: "]") else { break }
+                let inner = String(p[p.index(after: i)..<end]).trimmingCharacters(in: CharacterSet(charactersIn: "'\" "))
+                i = p.index(after: end)
+                cur = cur.flatMap { node -> [Any] in
+                    if inner == "*" { return child(node, "*") }
+                    if let n = Int(inner), let a = node as? [Any] {
+                        let j = n < 0 ? a.count + n : n
+                        return (j >= 0 && j < a.count) ? [a[j]] : []
+                    }
+                    return child(node, inner)
+                }
+            } else {
+                let key = readKey(p, &i)
+                cur = cur.flatMap { child($0, key) }
+            }
+        }
+        return cur
+    }
+
+    private static func readKey(_ p: String, _ i: inout String.Index) -> String {
+        let start = i
+        while i < p.endIndex, p[i] != ".", p[i] != "[" { i = p.index(after: i) }
+        return String(p[start..<i])
+    }
+
+    private static func child(_ node: Any, _ key: String) -> [Any] {
+        if key == "*" {
+            if let a = node as? [Any] { return a }
+            if let d = node as? [String: Any] { return Array(d.values) }
+            return []
+        }
+        if let d = node as? [String: Any], let v = d[key] { return [v] }
+        if let a = node as? [Any] { return a.flatMap { child($0, key) } }
+        return []
+    }
+
+    private static func deep(_ node: Any, _ key: String) -> [Any] {
+        var out: [Any] = []
+        if let d = node as? [String: Any] {
+            if let v = d[key] { out.append(v) }
+            for v in d.values { out += deep(v, key) }
+        } else if let a = node as? [Any] {
+            for v in a { out += deep(v, key) }
+        }
+        return out
+    }
+}
