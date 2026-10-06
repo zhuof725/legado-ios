@@ -66,7 +66,7 @@ import JavaScriptCore
     }
     
     @objc func substring(_ start: Int, _ end: Int) -> String {
-        let s = _body.utf16
+        let s = _body
         let startIdx = s.index(s.startIndex, offsetBy: max(0, start), limitedBy: s.endIndex) ?? s.startIndex
         let endIdx = s.index(s.startIndex, offsetBy: min(s.count, end), limitedBy: s.endIndex) ?? s.endIndex
         return String(s[startIdx..<endIdx])
