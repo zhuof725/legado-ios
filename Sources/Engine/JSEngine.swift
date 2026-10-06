@@ -39,7 +39,22 @@ import SwiftSoup
     }
 
     func ajax(_ url: String) -> String {
-        connectNative(url).body
+        let response = connectNative(url)
+        #if canImport(UIKit) && canImport(WebKit)
+        if WebViewSupport.isChallenge(response.body) {
+            let sem = DispatchSemaphore(value: 0)
+            var body = response.body
+            Task { @MainActor in
+                if let r = try? await WebViewLoader.load(url: response.url, headers: [:], allowInteractive: true) {
+                    body = r.0
+                }
+                sem.signal()
+            }
+            _ = sem.wait(timeout: .now() + 35)
+            return body
+        }
+        #endif
+        return response.body
     }
 
     func connectNative(_ url: String) -> StrResponse {

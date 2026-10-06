@@ -190,10 +190,17 @@ struct ReaderView: View {
             NavigationStack {
                 ScrollViewReader { p in
                     List(chapters) { c in
-                        Button {
-                            showToc = false; go(c.index)
-                        } label: {
-                            Text(c.title).foregroundStyle(c.index == index ? Color.accentColor : Color.primary)
+                        if c.isVolume {
+                            Text(c.title)
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                                .listRowBackground(Color.clear)
+                        } else {
+                            Button {
+                                showToc = false; go(c.index)
+                            } label: {
+                                Text(c.title).foregroundStyle(c.index == index ? Color.accentColor : Color.primary)
+                            }
                         }
                         .id(c.index)
                     }
@@ -241,13 +248,23 @@ struct ReaderView: View {
             }
         }
         if chapters.isEmpty { error = "目录为空，书源可能不兼容"; loading = false; return }
-        index = min(max(index, 0), chapters.count - 1)
+        index = readableIndex(from: index, direction: 1) ?? 0
         await loadContent()
     }
 
+    private func readableIndex(from value: Int, direction: Int) -> Int? {
+        guard !chapters.isEmpty else { return nil }
+        var i = min(max(value, 0), chapters.count - 1)
+        while chapters[i].isVolume || chapters[i].url.isEmpty {
+            i += direction
+            if i < 0 || i >= chapters.count { return nil }
+        }
+        return i
+    }
+
     private func go(_ i: Int) {
-        guard i >= 0, i < chapters.count else { return }
-        index = i
+        guard let target = readableIndex(from: i, direction: i >= index ? 1 : -1) else { return }
+        index = target
         Task { await loadContent() }
     }
 
