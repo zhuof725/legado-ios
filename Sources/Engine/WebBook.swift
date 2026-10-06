@@ -10,7 +10,7 @@ enum WebBook {
     }
 
     static func parseBookList(source: BookSource, body: String, baseUrl: String, rule: SearchRule) -> [Book] {
-        let ar = AnalyzeRule(content: body, baseUrl: baseUrl, jsLib: source.jsLib, context: RuleContext(source: source), jsLib: source.jsLib)
+        let ar = AnalyzeRule(content: body, baseUrl: baseUrl, jsLib: source.jsLib, context: RuleContext(source: source))
         let items = ar.getElements(rule.bookList)
         var out: [Book] = []
         for item in items {
@@ -72,7 +72,7 @@ enum WebBook {
             visited.insert(u)
             let au = AnalyzeUrl(rawUrl: u, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: RuleContext(source: source, book: book), jsLib: source.jsLib)
             let (body, url) = try await au.fetch()
-            let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: RuleContext(source: source, book: book), jsLib: source.jsLib)
+            let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: RuleContext(source: source, book: book))
             for item in ar.getElements(listRule) {
                 let title = ar.getString(rule.chapterName, from: item)
                 if title.isEmpty { continue }
@@ -111,7 +111,7 @@ enum WebBook {
             var au = AnalyzeUrl(rawUrl: u, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: RuleContext(source: source, book: book, chapter: chapter), jsLib: source.jsLib)
             if let wj = rule.webJs, !wj.isEmpty { au.webJs = wj }
             let (body, url) = try await au.fetch()
-            let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: RuleContext(source: source, book: book), jsLib: source.jsLib)
+            let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: RuleContext(source: source, book: book))
             parts.append(ar.getString(rule.content))
             let n = ar.getString(rule.nextContentUrl).components(separatedBy: "\n").first ?? ""
             next = n.isEmpty ? nil : AnalyzeUrl.absolute(n, base: url)

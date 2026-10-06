@@ -34,7 +34,10 @@ jobs:
           EOF
           sed -i '' 's/^          //' $P/Package.swift
       - name: Build
-        run: cd $RUNNER_TEMP/pkg && swift build -c release 2>&1 | tee test-build.log
+        run: |
+          set -o pipefail
+          cd $RUNNER_TEMP/pkg
+          swift build -c release 2>&1 | tee "$GITHUB_WORKSPACE/test-build.log"
       - name: Test uploaded sources
         run: |
           KEY="${{ github.event.inputs.key }}"
