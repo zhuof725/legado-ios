@@ -1,6 +1,7 @@
 import Foundation
 import JavaScriptCore
 import CommonCrypto
+import SwiftSoup
 
 /// Bridge object exposed to book-source JS as `java`.
 @objc protocol JavaBridgeExports: JSExport {
