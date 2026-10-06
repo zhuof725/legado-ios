@@ -67,7 +67,13 @@ final class AnalyzeRule {
     // MARK: - Public API
 
     func getString(_ rule: String?, from obj: Any? = nil) -> String {
-        guard let rule = rule, !rule.isEmpty else { return "" }
+        guard var rule = rule, !rule.isEmpty else { return "" }
+        if let g = obj as? [String], AnalyzeRule.hasGroupRef(rule) {
+            rule = AnalyzeRule.fillGroups(rule, g)
+            if !rule.contains("<js>") && rule.range(of: "@js:", options: .caseInsensitive) == nil {
+                return rule.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
         var cur: Any = obj ?? content
         for (isJs, s) in splitJS(rule) {
             if isJs { cur = runJS(s, cur) }
@@ -124,7 +130,9 @@ final class AnalyzeRule {
         } else if rule.contains("{$.") {
             out = replaceBraces(rule, pattern: "\\{(\\$\\.[^}]+)\\}") { self.singleString(obj, $0) }
         } else {
-            out = rule.isEmpty ? AnalyzeRule.asString(obj) : singleString(obj, rule)
+            if rule.isEmpty {
+                if let e = obj as? Element { out = (try? e.outerHtml()) ?? "" } else { out = AnalyzeRule.asString(obj) }
+            } else { out = singleString(obj, rule) }
         }
         if let re = regex, !re.isEmpty, let nre = try? NSRegularExpression(pattern: re) {
             let ns = out as NSString
@@ -209,10 +217,14 @@ final class AnalyzeRule {
             return []
         }
         if rule.contains("&&") { return rule.components(separatedBy: "&&").flatMap { elementsValue(obj, $0) } }
+        if rule.contains("%%") { return AnalyzeRule.interleave(rule.components(separatedBy: "%%").map { elementsValue(obj, $0) }) }
         var main = rule, reverse = false
         if main.hasPrefix("-") { reverse = true; main.removeFirst() }
+        if main.hasPrefix("+") { main.removeFirst() }
         var res: [Any]
-        if isJsonRule(main, obj) {
+        if main.hasPrefix(":") {
+            res = AnalyzeRule.allInOne(obj, String(main.dropFirst()))
+        } else if isJsonRule(main, obj) {
             res = JsonPath.query(jsonRoot(obj), stripPrefix(main)).flatMap { ($0 as? [Any]) ?? [$0] }
         } else if XPathRule.isXPath(main) {
             res = XPathRule.elements(obj, main)
@@ -234,6 +246,13 @@ final class AnalyzeRule {
     }
 
     private func applySegment(_ el: Element, _ seg: String) -> [Element] {
+        if let (base, spec) = AnalyzeRule.splitBracket(seg) {
+            let l = (base.isEmpty || base == "children") ? el.children().array() : applySegment(el, base)
+            return AnalyzeRule.pickIndexes(l, spec)
+        }
+        if seg.hasPrefix("."), seg.dropFirst().range(of: "^!?[-0-9:]+$", options: .regularExpression) != nil {
+            return AnalyzeRule.pickIndexes(el.children().array(), String(seg.dropFirst()))
+        }
         var parts = seg.components(separatedBy: ".")
         let type = parts.removeFirst()
         var list: [Element]
