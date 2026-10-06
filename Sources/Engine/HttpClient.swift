@@ -160,8 +160,28 @@ struct AnalyzeUrl {
         return (text ?? "", resp.url?.absoluteString ?? url)
     }
 
+    /// 表单 body 按 key=value 逐项做 URL 编码（与 Legado 一致），charset 为 gbk 时按 GBK 字节编码
     private func percentEncodedBody(_ b: String) -> String {
-        if b.hasPrefix("{") || charset == nil { return b }
-        return percentEncoded(b)
+        let t = b.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.hasPrefix("{") || t.hasPrefix("[") { return b }
+        if t.range(of: "%[0-9A-Fa-f]{2}", options: .regularExpression) != nil { return b }
+        return t.components(separatedBy: "&").map { pair -> String in
+            guard let eq = pair.firstIndex(of: "=") else { return encodeComponent(pair) }
+            let k = String(pair[..<eq])
+            let v = String(pair[pair.index(after: eq)...])
+            return encodeComponent(k) + "=" + encodeComponent(v)
+        }.joined(separator: "&")
+    }
+
+    func encodeComponent(_ s: String) -> String {
+        let enc = AnalyzeUrl.encoding(charset)
+        guard let d = s.data(using: enc) else { return s }
+        return d.map { b -> String in
+            if (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
+                || b == 0x2D || b == 0x5F || b == 0x2E || b == 0x7E || b == 0x2A {
+                return String(UnicodeScalar(b))
+            }
+            return String(format: "%%%02X", b)
+        }.joined()
     }
 }
