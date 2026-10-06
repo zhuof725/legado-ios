@@ -50,23 +50,39 @@ enum XPathRule {
     static func elements(_ obj: Any, _ rule: String) -> [Any] {
         let (path, _) = split(rule)
         guard let res = query(obj, path) else { return [] }
-        var out: [Any] = []
-        for n in res {
-            if let h = n.toHTML, h.hasPrefix("<") { out.append(h) }
-            else if let t = n.text { out.append(t) }
+        switch res {
+        case .String(let value): return value.isEmpty ? [] : [value]
+        case .Number(let value): return [value]
+        case .Bool(let value): return [value]
+        case .NodeSet(let nodes):
+            var out: [Any] = []
+            for i in 0..<nodes.count {
+                let n = nodes[i]
+                if let h = n.toHTML, h.hasPrefix("<") { out.append(h) }
+                else if let t = n.text { out.append(t) }
+            }
+            return out
+        default: return []
         }
-        return out
     }
 
     /// 文本规则：多个结果用换行连接
     static func string(_ obj: Any, _ rule: String) -> String {
         let (path, output) = split(rule)
         guard let res = query(obj, path) else { return "" }
-        var list: [String] = []
-        for n in res {
-            let v: String? = output == .html ? n.innerHTML : n.text
-            if let s = v?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { list.append(s) }
+        switch res {
+        case .String(let value): return value.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .Number(let value): return "\(value)"
+        case .Bool(let value): return value ? "true" : "false"
+        case .NodeSet(let nodes):
+            var list: [String] = []
+            for i in 0..<nodes.count {
+                let n = nodes[i]
+                let v: String? = output == .html ? n.innerHTML : n.text
+                if let s = v?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { list.append(s) }
+            }
+            return list.joined(separator: "\n")
+        default: return ""
         }
-        return list.joined(separator: "\n")
     }
 }
