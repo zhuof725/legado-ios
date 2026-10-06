@@ -166,7 +166,7 @@ final class AnalyzeRule {
         if isJsonRule(rule, obj) {
             return JsonPath.query(jsonRoot(obj), stripPrefix(rule)).map { AnalyzeRule.asString($0) }.joined(separator: "\n")
         }
-        if rule.lowercased().hasPrefix("@xpath:") || rule.hasPrefix("//") { return "" }
+        if XPathRule.isXPath(rule) { return XPathRule.string(obj, rule) }
         let isCss = rule.lowercased().hasPrefix("@css:")
         let body = isCss ? String(rule.dropFirst(5)) : rule
         guard let idx = body.range(of: "@", options: .backwards) else {
@@ -214,6 +214,8 @@ final class AnalyzeRule {
         var res: [Any]
         if isJsonRule(main, obj) {
             res = JsonPath.query(jsonRoot(obj), stripPrefix(main)).flatMap { ($0 as? [Any]) ?? [$0] }
+        } else if XPathRule.isXPath(main) {
+            res = XPathRule.elements(obj, main)
         } else if main.lowercased().hasPrefix("@css:") {
             res = (try? AnalyzeRule.element(obj)?.select(String(main.dropFirst(5))).array()) ?? []
         } else {

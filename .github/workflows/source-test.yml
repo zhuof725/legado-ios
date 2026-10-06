@@ -33,8 +33,8 @@ jobs:
           let package = Package(
             name: "SourceTest",
             platforms: [.macOS(.v13)],
-            dependencies: [.package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.7.0")],
-            targets: [.executableTarget(name: "SourceTest", dependencies: ["SwiftSoup"])]
+            dependencies: [.package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.7.0"), .package(url: "https://github.com/tid-kijyun/Kanna.git", from: "5.2.7")],
+            targets: [.executableTarget(name: "SourceTest", dependencies: ["SwiftSoup", "Kanna"])]
           )
           EOF
           sed -i '' 's/^          //' $P/Package.swift
