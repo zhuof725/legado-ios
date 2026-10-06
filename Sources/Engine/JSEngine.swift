@@ -14,6 +14,12 @@ import CommonCrypto
     func log(_ s: String) -> String
     func put(_ key: String, _ value: String) -> String
     func get(_ key: String) -> String
+    func hexDecodeToString(_ s: String) -> String
+    func hexEncodeToString(_ s: String) -> String
+    func toast(_ s: String) -> String
+    func longToast(_ s: String) -> String
+    func encodeURIComponent(_ s: String) -> String
+    func timeFormatUTC(_ t: Double, _ format: String, _ offset: Int) -> String
 }
 
 @objc final class JavaBridge: NSObject, JavaBridgeExports {
@@ -64,34 +70,66 @@ import CommonCrypto
         JavaBridge.lock.lock(); defer { JavaBridge.lock.unlock() }
         return JavaBridge.store[key] ?? ""
     }
+    func hexDecodeToString(_ s: String) -> String {
+        var bytes: [UInt8] = []
+        var i = s.startIndex
+        while i < s.endIndex, let j = s.index(i, offsetBy: 2, limitedBy: s.endIndex) {
+            if let b = UInt8(s[i..<j], radix: 16) { bytes.append(b) }
+            i = j
+        }
+        return String(data: Data(bytes), encoding: .utf8) ?? ""
+    }
+    func hexEncodeToString(_ s: String) -> String { s.utf8.map { String(format: "%02x", $0) }.joined() }
+    func toast(_ s: String) -> String { print("[toast] \(s)"); return s }
+    func longToast(_ s: String) -> String { print("[toast] \(s)"); return s }
+    func encodeURIComponent(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_.!~*'()"))) ?? s
+    }
+    func timeFormatUTC(_ t: Double, _ format: String, _ offset: Int) -> String {
+        let f = DateFormatter(); f.dateFormat = format.isEmpty ? "yyyy/MM/dd HH:mm" : format
+        f.timeZone = TimeZone(secondsFromGMT: offset * 3600)
+        return f.string(from: Date(timeIntervalSince1970: t > 1e12 ? t / 1000 : t))
+    }
 }
 
 final class JSEngine {
     static let shared = JSEngine()
-    private let queue = DispatchQueue(label: "legado.js")
+    /// 当前正在执行的书源（供 JS 里的 `source` 对象使用）
+    static var currentSource: BookSource?
+
+    private static let prelude = """
+    var cookie={getCookie:function(){return ''},getKey:function(){return ''},removeCookie:function(){},setCookie:function(){},replaceCookie:function(){}};
+    var cache={get:function(k){return java.get(k)},put:function(k,v){return java.put(k,String(v))},getFromMemory:function(k){return java.get(k)},putMemory:function(k,v){return java.put(k,String(v))}};
+    var source={bookSourceUrl:'',bookSourceName:'',bookSourceComment:'',getKey:function(){return this.bookSourceUrl},getVariable:function(){return java.get('__var_'+this.bookSourceUrl)},setVariable:function(v){java.put('__var_'+this.bookSourceUrl,String(v))},put:function(k,v){return java.put(k,String(v))},get:function(k){return java.get(k)}};
+    var book={name:'',author:'',bookUrl:'',tocUrl:'',getVariable:function(){return ''},setVariable:function(){}};
+    var chapter={title:'',url:'',index:0};
+    """
 
     private func makeContext() -> JSContext {
         let ctx = JSContext()!
         ctx.exceptionHandler = { _, e in print("[JS error] \(e?.toString() ?? "")") }
         ctx.setObject(JavaBridge(), forKeyedSubscript: "java" as NSString)
-        ctx.evaluateScript("var cookie={getCookie:function(){return ''}};var cache={get:function(k){return java.get(k)},put:function(k,v){return java.put(k,v)}};")
+        ctx.evaluateScript(JSEngine.prelude)
+        if let s = JSEngine.currentSource, let src = ctx.objectForKeyedSubscript("source") {
+            src.setObject(s.bookSourceUrl, forKeyedSubscript: "bookSourceUrl" as NSString)
+            src.setObject(s.bookSourceName, forKeyedSubscript: "bookSourceName" as NSString)
+            src.setObject(s.bookSourceComment ?? "", forKeyedSubscript: "bookSourceComment" as NSString)
+        }
         return ctx
     }
 
     /// Evaluate a JS snippet with `result`, `baseUrl`, `book`, `key`, `page` in scope.
     func eval(_ script: String, result: Any? = nil, baseUrl: String? = nil,
               vars: [String: Any] = [:], jsLib: String? = nil) -> Any? {
-        queue.sync {
-            let ctx = makeContext()
-            if let lib = jsLib, !lib.isEmpty, !lib.hasPrefix("{") { ctx.evaluateScript(lib) }
-            ctx.setObject(result ?? "", forKeyedSubscript: "result" as NSString)
-            ctx.setObject(baseUrl ?? "", forKeyedSubscript: "baseUrl" as NSString)
-            for (k, v) in vars { ctx.setObject(v, forKeyedSubscript: k as NSString) }
-            guard let v = ctx.evaluateScript(script), !v.isUndefined, !v.isNull else { return nil }
-            if v.isString || v.isNumber || v.isBoolean { return v.toString() }
-            if v.isArray { return v.toArray() }
-            return v.toObject() ?? v.toString()
-        }
+        let ctx = makeContext()
+        if let lib = jsLib, !lib.isEmpty, !lib.hasPrefix("{") { ctx.evaluateScript(lib) }
+        ctx.setObject(result ?? "", forKeyedSubscript: "result" as NSString)
+        ctx.setObject(baseUrl ?? "", forKeyedSubscript: "baseUrl" as NSString)
+        for (k, v) in vars { ctx.setObject(v, forKeyedSubscript: k as NSString) }
+        guard let v = ctx.evaluateScript(script), !v.isUndefined, !v.isNull else { return nil }
+        if v.isString || v.isNumber || v.isBoolean { return v.toString() }
+        if v.isArray { return v.toArray() }
+        return v.toObject() ?? v.toString()
     }
 
     func evalString(_ script: String, result: Any? = nil, baseUrl: String? = nil) -> String? {

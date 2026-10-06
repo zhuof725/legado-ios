@@ -10,7 +10,8 @@ struct AnalyzeUrl {
 
     init(rawUrl: String, key: String? = nil, page: Int = 1, baseUrl: String? = nil, sourceHeader: String? = nil) {
         var s = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Template substitution
+        // @js: / <js></js> 先执行，再做模板替换（与 Legado 一致）
+        s = AnalyzeUrl.evalUrlJS(s, key: key, page: page, baseUrl: baseUrl)
         s = AnalyzeUrl.substitute(s, key: key, page: page)
         // <1,2,3> page selection
         if let r = s.range(of: "<[^>]+>", options: .regularExpression) {
@@ -22,14 +23,13 @@ struct AnalyzeUrl {
         var options: [String: Any]? = nil
         if let r = s.range(of: ",\\s*\\{", options: .regularExpression) {
             let jsonPart = String(s[s.index(after: r.lowerBound)...]).trimmingCharacters(in: .whitespaces)
-            if let d = jsonPart.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            if let o = AnalyzeUrl.looseJSON(jsonPart) {
                 options = o
                 s = String(s[..<r.lowerBound])
             }
         }
         url = AnalyzeUrl.absolute(s, base: baseUrl)
-        if let h = sourceHeader, let d = h.data(using: .utf8),
-           let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+        if let h = sourceHeader, let o = AnalyzeUrl.looseJSON(h) {
             for (k, v) in o { headers[k] = "\(v)" }
         }
         if let o = options {
@@ -38,6 +38,45 @@ struct AnalyzeUrl {
             if let c = o["charset"] as? String { charset = c }
             if let h = o["headers"] as? [String: Any] { for (k, v) in h { headers[k] = "\(v)" } }
         }
+    }
+
+    /// 解析 Legado 常见的单引号 JSON，如 {'method':'POST','body':'k=v'}
+    static func looseJSON(_ s: String) -> [String: Any]? {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.hasPrefix("{") else { return nil }
+        if let d = t.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] { return o }
+        guard let r = JSEngine.shared.eval("JSON.stringify(eval('(' + __src + ')'))", vars: ["__src": t]) as? String,
+              let d = r.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: d) as? [String: Any]
+    }
+
+    /// 执行 URL 规则里的 @js: 和 <js></js>，返回最终的 URL 字符串
+    static func evalUrlJS(_ raw: String, key: String?, page: Int, baseUrl: String?) -> String {
+        guard raw.contains("<js>") || raw.range(of: "@js:", options: .caseInsensitive) != nil else { return raw }
+        var result = ""
+        var rest = raw
+        let vars: [String: Any] = ["key": key ?? "", "page": page, "searchKey": key ?? "", "searchPage": page]
+        func run(_ js: String) {
+            let v = JSEngine.shared.eval(js, result: result, baseUrl: baseUrl ?? "", vars: vars)
+            result = v.map { AnalyzeRule.asString($0) } ?? ""
+        }
+        while let r = rest.range(of: "<js>") {
+            let before = String(rest[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !before.isEmpty { result = before }
+            let after = rest[r.upperBound...]
+            if let e = after.range(of: "</js>") {
+                run(String(after[..<e.lowerBound])); rest = String(after[e.upperBound...])
+            } else { run(String(after)); rest = "" }
+        }
+        if let r = rest.range(of: "@js:", options: .caseInsensitive) {
+            let before = String(rest[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !before.isEmpty { result = before }
+            run(String(rest[r.upperBound...]))
+        } else {
+            let t = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { result = t }
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func substitute(_ s: String, key: String?, page: Int) -> String {
