@@ -93,22 +93,23 @@ struct AnalyzeUrl {
     }
 
     static func substitute(_ s: String, key: String?, page: Int) -> String {
-        var out = s
         let k = key ?? ""
-        for (pat, val) in [("{{key}}", k), ("{key}", k), ("searchKey", k), ("{{page}}", "\(page)"), ("{page}", "\(page)"), ("searchPage", "\(page)")] {
-            out = out.replacingOccurrences(of: pat, with: val)
+        guard let re = try? NSRegularExpression(pattern: "\\{\\{([\\s\\S]*?)\\}\\}") else { return s }
+        var result = s
+        let original = s as NSString
+        // Legado 先计算每个 {{js}}，再处理 page 标记，避免先替换 key 破坏 JS。
+        for match in re.matches(in: s, range: NSRange(location: 0, length: original.length)).reversed() {
+            let expr = original.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let js = expr.replacingOccurrences(of: "searchKey", with: "key")
+                .replacingOccurrences(of: "searchPage", with: "page")
+            let value: String
+            if js == "key" { value = k }
+            else if js == "page" { value = "\(page)" }
+            else { value = JSEngine.shared.evalString(js, vars: ["key": k, "page": page]) ?? "" }
+            result = (result as NSString).replacingCharacters(in: match.range, with: value)
         }
-        // simple arithmetic like {{page-1}} / {{(page-1)*20}}
-        let re = try! NSRegularExpression(pattern: "\\{\\{([^}]*)\\}\\}")
-        let ns = out as NSString
-        var result = out
-        for m in re.matches(in: out, range: NSRange(location: 0, length: ns.length)).reversed() {
-            let expr = ns.substring(with: m.range(at: 1)).replacingOccurrences(of: "page", with: "\(page)")
-                .replacingOccurrences(of: "key", with: "'\(k)'")
-            let v = JSEngine.shared.evalString(expr, context: nil) ?? ""
-            result = (result as NSString).replacingCharacters(in: m.range, with: v)
-        }
-        return result
+        return result.replacingOccurrences(of: "{key}", with: k)
+            .replacingOccurrences(of: "{page}", with: "\(page)")
     }
 
     static func absolute(_ s: String, base: String?) -> String {
