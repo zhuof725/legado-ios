@@ -75,10 +75,20 @@ enum WebBook {
             for item in ar.getElements(listRule) {
                 let title = ar.getString(rule.chapterName, from: item)
                 if title.isEmpty { continue }
-                var cu = ar.getString(rule.chapterUrl, from: item)
-                cu = cu.isEmpty ? url : AnalyzeUrl.absolute(cu, base: url)
                 let vol = ar.getString(rule.isVolume, from: item)
-                list.append(BookChapter(url: cu, title: title, index: 0, isVolume: vol == "true" || vol == "1"))
+                let isVol = vol == "true" || vol == "1"
+                var cu = ar.getString(rule.chapterUrl, from: item)
+                // 卷标题允许空 URL，普通章节必须有链接
+                if cu.isEmpty {
+                    if isVol {
+                        cu = "" // 卷标题可以没有链接
+                    } else {
+                        continue // 跳过没有链接的普通章节
+                    }
+                } else {
+                    cu = AnalyzeUrl.absolute(cu, base: url)
+                }
+                list.append(BookChapter(url: cu, title: title, index: 0, isVolume: isVol))
             }
             let n = ar.getString(rule.nextTocUrl).components(separatedBy: "\n").first ?? ""
             next = n.isEmpty ? nil : AnalyzeUrl.absolute(n, base: url)
