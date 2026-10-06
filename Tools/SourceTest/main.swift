@@ -43,6 +43,9 @@ for s in sources {
             print("  请求: \(au.method) \(short(au.url, 150))  charset=\(au.charset ?? "-") body=\(short(au.body, 80))")
             let (body, finalUrl) = try await au.fetch()
             print("  响应: \(body.count) 字符, url=\(short(finalUrl, 100)), 开头: \(short(body, 120))")
+            try? FileManager.default.createDirectory(atPath: "dumps", withIntermediateDirectories: true)
+            let safeName = s.bookSourceName.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: " ", with: "_")
+            try? body.write(toFile: "dumps/\(safeName)-search.html", atomically: true, encoding: .utf8)
             let books = WebBook.parseBookList(source: s, body: body, baseUrl: finalUrl, rule: s.ruleSearch ?? SearchRule())
             print("  搜索结果: \(books.count) 条")
             guard let first = books.first(where: { $0.name.contains(key) }) ?? books.first else { return "搜索0条" }
