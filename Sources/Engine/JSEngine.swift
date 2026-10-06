@@ -264,8 +264,8 @@ final class JSEngine {
     }
 
     func evalString(_ script: String, result: Any? = nil, baseUrl: String? = nil,
-                    context: RuleContext? = nil) -> String? {
-        guard let v = eval(script, result: result, baseUrl: baseUrl, context: context) else { return nil }
+                    vars: [String: Any] = [:], context: RuleContext? = nil) -> String? {
+        guard let v = eval(script, result: result, baseUrl: baseUrl, vars: vars, context: context) else { return nil }
         if let s = v as? String { return s }
         if let a = v as? [Any] { return a.map { "\($0)" }.joined(separator: "\n") }
         if JSONSerialization.isValidJSONObject(v), let d = try? JSONSerialization.data(withJSONObject: v) {

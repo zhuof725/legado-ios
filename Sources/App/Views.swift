@@ -190,16 +190,18 @@ struct ReaderView: View {
             NavigationStack {
                 ScrollViewReader { p in
                     List(chapters) { c in
-                        if c.isVolume {
-                            Text(c.title)
-                                .font(.headline)
-                                .foregroundStyle(.secondary)
-                                .listRowBackground(Color.clear)
-                        } else {
-                            Button {
-                                showToc = false; go(c.index)
-                            } label: {
-                                Text(c.title).foregroundStyle(c.index == index ? Color.accentColor : Color.primary)
+                        Group {
+                            if c.isVolume {
+                                Text(c.title)
+                                    .font(.headline)
+                                    .foregroundStyle(.secondary)
+                                    .listRowBackground(Color.clear)
+                            } else {
+                                Button {
+                                    showToc = false; go(c.index)
+                                } label: {
+                                    Text(c.title).foregroundStyle(c.index == index ? Color.accentColor : Color.primary)
+                                }
                             }
                         }
                         .id(c.index)
