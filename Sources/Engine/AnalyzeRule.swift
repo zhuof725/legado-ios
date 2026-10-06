@@ -199,8 +199,9 @@ final class AnalyzeRule {
             if t == "baseUrl" { return baseUrl }
             if t == "host" || t == "{{host}}" { return context.get("host") }
             if t.hasPrefix("@get:") { return context.get(String(t.dropFirst(5))) }
-            if t.hasPrefix("@") || t.hasPrefix("$.") || t.hasPrefix("//") {
-                return self.singleString(obj, t.hasPrefix("@@") ? String(t.dropFirst(2)) : t)
+            if t.hasPrefix("@") || t.hasPrefix("$.") || t.hasPrefix("$[") || t.hasPrefix("//") {
+                let rule = t.hasPrefix("@@") ? String(t.dropFirst(2)) : t
+                return self.stringValue(obj, rule)
             }
             return AnalyzeRule.asString(self.runJS(t, obj))
         }
