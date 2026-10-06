@@ -4,7 +4,8 @@ import CommonCrypto
 
 /// Bridge object exposed to book-source JS as `java`.
 @objc protocol JavaBridgeExports: JSExport {
-    func ajax(_ url: String) -> String
+    func ajax(_ url: String) -> StrResponse
+    func connect(_ url: String) -> StrResponse
     func base64Decode(_ s: String) -> String
     func base64Encode(_ s: String) -> String
     func md5Encode(_ s: String) -> String
@@ -26,16 +27,20 @@ import CommonCrypto
     static var store: [String: String] = [:]
     static let lock = NSLock()
 
-    func ajax(_ url: String) -> String {
+    func ajax(_ url: String) -> StrResponse {
         let sem = DispatchSemaphore(value: 0)
-        var result = ""
+        var result: (String, URLResponse?) = ("", nil)
         let au = AnalyzeUrl(rawUrl: url)
         Task.detached {
-            result = (try? await au.fetch().0) ?? ""
+            result = (try? await au.fetch()) ?? ("", nil)
             sem.signal()
         }
         _ = sem.wait(timeout: .now() + 25)
-        return result
+        return StrResponse(response: result.1, body: result.0)
+    }
+    
+    func connect(_ url: String) -> StrResponse {
+        return ajax(url)
     }
     func base64Decode(_ s: String) -> String {
         var t = s.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -103,11 +108,10 @@ final class JSEngine {
     var source={bookSourceUrl:'',bookSourceName:'',bookSourceComment:'',getKey:function(){return this.bookSourceUrl},getVariable:function(){return java.get('__var_'+this.bookSourceUrl)},setVariable:function(v){java.put('__var_'+this.bookSourceUrl,String(v))},put:function(k,v){return java.put(k,String(v))},get:function(k){return java.get(k)}};
     var book={name:'',author:'',bookUrl:'',tocUrl:'',getVariable:function(){return ''},setVariable:function(){}};
     var chapter={title:'',url:'',index:0};
-    java.startBrowserAwait=function(u,t){var b=String(java.ajax(String(u)));return {body:function(){return b},url:function(){return String(u)},toString:function(){return b}};};
+    java.startBrowserAwait=function(u,t){return java.ajax(String(u))};
     java.startBrowser=function(u,t){return ''};
     java.webView=function(h,u,js){return java.ajax(String(u))};
-    java.connect=function(u){var b=String(java.ajax(String(u)));return {body:function(){return b},toString:function(){return b}};};
-    java.ajaxAll=function(arr){var o=[];for(var i=0;i<arr.length;i++){var b=String(java.ajax(String(arr[i])));o.push({body:function(x){return function(){return x}}(b)});}return o;};
+    java.ajaxAll=function(arr){var o=[];for(var i=0;i<arr.length;i++){o.push(java.ajax(String(arr[i])));}return o;};
     java.getString=function(r){return (typeof __ruleGetString==='function')?String(__ruleGetString(String(r))):''};
     java.getStringList=function(r){var s=java.getString(r);return s?s.split('\\n'):[]};
     java.getElement=function(r){return (typeof __ruleGetElements==='function')?__ruleGetElements(String(r))[0]:null};
