@@ -164,6 +164,13 @@ final class JSEngine {
     var source={bookSourceUrl:'',bookSourceName:'',bookSourceComment:'',getKey:function(){return this.bookSourceUrl},getVariable:function(){return java.storeGet('__var_'+this.bookSourceUrl)},setVariable:function(v){java.storePut('__var_'+this.bookSourceUrl,String(v))},put:function(k,v){return java.storePut(k,String(v))},get:function(k){return java.storeGet(k)}};
     var book={name:'',author:'',bookUrl:'',tocUrl:'',getVariable:function(){return ''},setVariable:function(){}};
     var chapter={title:'',url:'',index:0};
+    var Packages={org:{jsoup:{Jsoup:{parse:function(html){
+        var root={select:function(q){
+            var arr=typeof __ruleGetElements==='function'?__ruleGetElements('@css:'+q):[];
+            return {size:function(){return arr.length},get:function(i){return arr[i]},toArray:function(){return arr},length:arr.length};
+        },text:function(){return String(html)},html:function(){return String(html)},toString:function(){return String(html)}};
+        return root;
+    }}}}};
     function __response(r){
         if(!r){return null;}
         return {

@@ -19,7 +19,7 @@ struct AnalyzeUrl {
         var s = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         // @js: / <js></js> 先执行，再做模板替换（与 Legado 一致）
         s = AnalyzeUrl.evalUrlJS(s, key: key, page: page, baseUrl: baseUrl, context: context)
-        s = AnalyzeUrl.substitute(s, key: key, page: page)
+        s = AnalyzeUrl.substitute(s, key: key, page: page, context: context)
         // <1,2,3> page selection
         if let r = s.range(of: "<[^>]+>", options: .regularExpression) {
             let items = s[r].dropFirst().dropLast().split(separator: ",").map(String.init)
@@ -92,7 +92,7 @@ struct AnalyzeUrl {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func substitute(_ s: String, key: String?, page: Int) -> String {
+    static func substitute(_ s: String, key: String?, page: Int, context: RuleContext? = nil) -> String {
         let k = key ?? ""
         guard let re = try? NSRegularExpression(pattern: "\\{\\{([\\s\\S]*?)\\}\\}") else { return s }
         var result = s
@@ -105,7 +105,9 @@ struct AnalyzeUrl {
             let value: String
             if js == "key" { value = k }
             else if js == "page" { value = "\(page)" }
-            else { value = JSEngine.shared.evalString(js, vars: ["key": k, "page": page]) ?? "" }
+            else if js == "host" || js == "baseUrl" { value = context?.source?.bookSourceUrl ?? "" }
+            else if js.hasPrefix("@get:") { value = context?.get(String(js.dropFirst(5))) ?? "" }
+            else { value = JSEngine.shared.evalString(js, vars: ["key": k, "page": page], context: context) ?? "" }
             result = (result as NSString).replacingCharacters(in: match.range, with: value)
         }
         return result.replacingOccurrences(of: "{key}", with: k)

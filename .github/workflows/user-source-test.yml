@@ -1,0 +1,50 @@
+name: Uploaded source test
+
+on:
+  workflow_dispatch:
+    inputs:
+      key:
+        description: 搜索关键词
+        required: true
+        default: 斗罗大陆
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Swift package
+        run: |
+          P=$RUNNER_TEMP/pkg
+          mkdir -p $P/Sources/SourceTest
+          cp Sources/Engine/*.swift Sources/Models/*.swift $P/Sources/SourceTest/
+          cp Tools/SourceTest/main.swift $P/Sources/SourceTest/
+          cat > $P/Package.swift <<'EOF'
+          // swift-tools-version:5.9
+          import PackageDescription
+          let package = Package(
+            name: "SourceTest",
+            platforms: [.macOS(.v13)],
+            dependencies: [
+              .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.7.0"),
+              .package(url: "https://github.com/tid-kijyun/Kanna.git", from: "5.2.7")
+            ],
+            targets: [.executableTarget(name: "SourceTest", dependencies: ["SwiftSoup", "Kanna"])]
+          )
+          EOF
+          sed -i '' 's/^          //' $P/Package.swift
+      - name: Build
+        run: cd $RUNNER_TEMP/pkg && swift build -c release 2>&1 | tee test-build.log
+      - name: Test uploaded sources
+        run: |
+          KEY="${{ github.event.inputs.key }}"
+          $RUNNER_TEMP/pkg/.build/release/SourceTest user-sources.json "$KEY" 90 2>&1 | tee user-source-test.log
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uploaded-source-test
+          path: |
+            user-source-test.log
+            test-build.log
+            dumps/

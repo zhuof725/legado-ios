@@ -21,4 +21,8 @@ final class RuleContext {
     }
 
     func get(_ key: String) -> String { variables[key] ?? "" }
+
+    func putAll(_ values: [String: String]) {
+        for (key, value) in values { variables[key] = value }
+    }
 }

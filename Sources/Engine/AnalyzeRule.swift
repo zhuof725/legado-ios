@@ -70,6 +70,7 @@ final class AnalyzeRule {
 
     func getString(_ rule: String?, from obj: Any? = nil) -> String {
         guard var rule = rule, !rule.isEmpty else { return "" }
+        rule = resolvePut(rule, from: obj)
         if let g = obj as? [String], AnalyzeRule.hasGroupRef(rule) {
             rule = AnalyzeRule.fillGroups(rule, g)
             if !rule.contains("<js>") && rule.range(of: "@js:", options: .caseInsensitive) == nil {
@@ -104,6 +105,26 @@ final class AnalyzeRule {
             return [p]
         }
         return [cur]
+    }
+
+    private func resolvePut(_ raw: String, from obj: Any?) -> String {
+        guard let re = try? NSRegularExpression(pattern: "@put:\\{([^{}]*)\\}") else { return raw }
+        var out = raw
+        let ns = raw as NSString
+        for m in re.matches(in: raw, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let body = ns.substring(with: m.range(at: 1))
+            var values: [String: String] = [:]
+            for pair in body.split(separator: ",") {
+                let parts = pair.split(separator: ":", maxSplits: 1).map(String.init)
+                guard parts.count == 2 else { continue }
+                let key = parts[0].trimmingCharacters(in: CharacterSet(charactersIn: " \\\"'"))
+                let valueRule = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: " \\\"'"))
+                if !key.isEmpty { values[key] = singleString(obj ?? content, valueRule) }
+            }
+            context.putAll(values)
+            out = (out as NSString).replacingCharacters(in: m.range, with: "")
+        }
+        return out
     }
 
     // MARK: - String rules
@@ -152,6 +173,9 @@ final class AnalyzeRule {
     private func template(_ obj: Any, _ rule: String) -> String {
         replaceBraces(rule, pattern: "\\{\\{([\\s\\S]*?)\\}\\}") { inner in
             let t = inner.trimmingCharacters(in: .whitespaces)
+            if t == "baseUrl" { return baseUrl }
+            if t == "host" || t == "{{host}}" { return context.get("host") }
+            if t.hasPrefix("@get:") { return context.get(String(t.dropFirst(5))) }
             if t.hasPrefix("@") || t.hasPrefix("$.") || t.hasPrefix("//") {
                 return self.singleString(obj, t.hasPrefix("@@") ? String(t.dropFirst(2)) : t)
             }

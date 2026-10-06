@@ -38,9 +38,13 @@ enum WebBook {
         guard let rule = source.ruleBookInfo else { return b }
         let au = AnalyzeUrl(rawUrl: book.bookUrl, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: RuleContext(source: source, book: book))
         let (body, url) = try await au.fetch()
-        let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: RuleContext(source: source, book: b))
+        let context = RuleContext(source: source, book: b)
+        let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: context)
         var root: Any? = nil
-        if let i = rule.`init`, !i.isEmpty { root = ar.getElements(i).first }
+        if let i = rule.`init`, !i.isEmpty {
+            let initText = ar.getString(i)
+            root = AnalyzeRule.parse(initText, baseUrl: url)
+        }
         func s(_ r: String?) -> String { ar.getString(r, from: root) }
         let n = s(rule.name); if !n.isEmpty { b.name = n }
         let a = s(rule.author); if !a.isEmpty { b.author = a }
@@ -51,6 +55,7 @@ enum WebBook {
         if let v = nilIfEmpty(s(rule.coverUrl)) { b.coverUrl = AnalyzeUrl.absolute(v, base: url) }
         let toc = s(rule.tocUrl)
         b.tocUrl = toc.isEmpty ? url : AnalyzeUrl.absolute(toc, base: url)
+        context.book = b
         return b
     }
 
