@@ -148,15 +148,30 @@ struct SourcesView: View {
                     }
             }
         }
-        .fileImporter(isPresented: $showFile, allowedContentTypes: [.json, .plainText, .text]) { r in
-            guard case .success(let url) = r else { return }
-            let ok = url.startAccessingSecurityScopedResource()
-            defer { if ok { url.stopAccessingSecurityScopedResource() } }
-            if let t = try? String(contentsOf: url, encoding: .utf8) { doImport(t) }
+        .sheet(isPresented: $showFile) {
+            DocumentPicker(onPick: { urls in
+                showFile = false
+                importFiles(urls)
+            }, onCancel: { showFile = false })
+            .ignoresSafeArea()
         }
         .alert(message ?? "", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("好", role: .cancel) {}
         }
+    }
+
+    private func importFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        var total = 0
+        var failed: [String] = []
+        for url in urls {
+            guard let t = DocumentPicker.readText(url) else { failed.append(url.lastPathComponent); continue }
+            do { total += try store.importSources(json: t) }
+            catch { failed.append(url.lastPathComponent) }
+        }
+        var msg = "成功导入 \(total) 个书源"
+        if !failed.isEmpty { msg += "\n失败文件：" + failed.joined(separator: "、") }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { message = msg }
     }
 
     private func doImport(_ text: String) {
