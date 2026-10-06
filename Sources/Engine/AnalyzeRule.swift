@@ -397,6 +397,9 @@ enum JsonPath {
                 let inner = String(p[p.index(after: i)..<end]).trimmingCharacters(in: CharacterSet(charactersIn: "'\" "))
                 i = p.index(after: end)
                 cur = cur.flatMap { node -> [Any] in
+                    if inner.hasPrefix("?") {
+                        return filter(node, expression: String(inner.dropFirst()).trimmingCharacters(in: CharacterSet(charactersIn: "() ")))
+                    }
                     if inner == "*" { return child(node, "*") }
                     if let n = Int(inner), let a = node as? [Any] {
                         let j = n < 0 ? a.count + n : n
@@ -410,6 +413,28 @@ enum JsonPath {
             }
         }
         return cur
+    }
+
+    private static func filter(_ node: Any, expression: String) -> [Any] {
+        let array: [Any]
+        if let a = node as? [Any] { array = a }
+        else if let d = node as? [String: Any] { array = Array(d.values) }
+        else { return [] }
+        let exp = expression.replacingOccurrences(of: "@.", with: "")
+        let ops = ["==", "!=", " contains "]
+        guard let op = ops.first(where: { exp.contains($0) }) else { return array }
+        let parts = exp.components(separatedBy: op)
+        guard parts.count == 2 else { return array }
+        let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        let expected = parts[1].trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "'\"")))
+        return array.filter { item in
+            let actual: String
+            if let d = item as? [String: Any] { actual = String(describing: d[key] ?? "") }
+            else { actual = String(describing: item) }
+            if op == "==" { return actual == expected }
+            if op == "!=" { return actual != expected }
+            return actual.localizedCaseInsensitiveContains(expected)
+        }
     }
 
     private static func readKey(_ p: String, _ i: inout String.Index) -> String {
