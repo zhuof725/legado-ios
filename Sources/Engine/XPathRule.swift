@@ -66,11 +66,46 @@ enum XPathRule {
         }
     }
 
+    private static func fallbackString(_ obj: Any, _ path: String) -> String {
+        guard let root = try? SwiftSoup.parse(html(of: obj)) else { return "" }
+        var selector = path
+        var attr: String?
+        if let slash = selector.range(of: "/@", options: .backwards) {
+            attr = String(selector[slash.upperBound...])
+            selector = String(selector[..<slash.lowerBound])
+        } else if selector.hasSuffix("/text()") {
+            selector = String(selector.dropLast(7)); attr = "text"
+        }
+        selector = selector.replacingOccurrences(of: "//", with: " ")
+            .replacingOccurrences(of: "/", with: " ")
+        let classPattern = try? NSRegularExpression(pattern: "(div|ul|li|a|p)\\[@class=['\\\"]([^'\\\"]+)['\\\"]\\]")
+        if let re = classPattern, let m = re.firstMatch(in: selector, range: NSRange(location: 0, length: (selector as NSString).length)) {
+            let tag = (selector as NSString).substring(with: m.range(at: 1))
+            let cls = (selector as NSString).substring(with: m.range(at: 2))
+            selector = selector.replacingCharacters(in: Range(m.range, in: selector)!, with: "\(tag).\(cls.replacingOccurrences(of: " ", with: "."))")
+        }
+        if let re = try? NSRegularExpression(pattern: "\\[contains\\(text\\(\\),\\s*['\"]([^'\"]+)['\"]\\)\\]") {
+            let ns = selector as NSString
+            for m in re.matches(in: selector, range: NSRange(location: 0, length: ns.length)).reversed() {
+                let text = ns.substring(with: m.range(at: 1))
+                selector = (selector as NSString).replacingCharacters(in: m.range, with: ":contains(\(text))")
+            }
+        }
+        selector = selector.trimmingCharacters(in: .whitespaces)
+        let elements = (try? root.select(selector).array()) ?? []
+        return elements.compactMap { e in
+            if attr == "text" { return try? e.text() }
+            if let attr { return try? e.attr(attr) }
+            return try? e.text()
+        }.joined(separator: "\n")
+    }
+
     /// 文本规则：多个结果用换行连接
     static func string(_ obj: Any, _ rule: String) -> String {
         let (path, output) = split(rule)
-        guard let res = query(obj, path) else { return "" }
+        guard let res = query(obj, path) else { return fallbackString(obj, path) }
         switch res {
+        case .none: return fallbackString(obj, path)
         case .String(let value): return value.trimmingCharacters(in: .whitespacesAndNewlines)
         case .Number(let value): return "\(value)"
         case .Bool(let value): return value ? "true" : "false"
