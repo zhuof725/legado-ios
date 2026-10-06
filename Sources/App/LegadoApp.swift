@@ -9,6 +9,7 @@ struct LegadoApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .onAppear { VerifyPresenter.install() }
                 .environmentObject(store)
                 .environmentObject(settings)
                 .onOpenURL { handle($0) }

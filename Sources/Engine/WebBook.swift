@@ -98,7 +98,8 @@ enum WebBook {
         while let u = next, !u.isEmpty, !visited.contains(u), visited.count < 20 {
             if let nc = nextChapterUrl, u == nc, !visited.isEmpty { break }
             visited.insert(u)
-            let au = AnalyzeUrl(rawUrl: u, baseUrl: source.bookSourceUrl, sourceHeader: source.header)
+            var au = AnalyzeUrl(rawUrl: u, baseUrl: source.bookSourceUrl, sourceHeader: source.header)
+            if let wj = rule.webJs, !wj.isEmpty { au.webJs = wj }
             let (body, url) = try await au.fetch()
             let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib)
             parts.append(ar.getString(rule.content))

@@ -7,6 +7,10 @@ struct AnalyzeUrl {
     var body: String?
     var charset: String?
     var headers: [String: String] = [:]
+    /// 教程 UrlOption.webView：非空即用 WebView 加载
+    var webView: Bool = false
+    /// ruleContent.webJs：WebView 加载后执行的 JS
+    var webJs: String?
 
     init(rawUrl: String, key: String? = nil, page: Int = 1, baseUrl: String? = nil, sourceHeader: String? = nil) {
         var s = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -37,6 +41,12 @@ struct AnalyzeUrl {
             if let b = o["body"] { body = (b as? String) ?? AnalyzeUrl.jsonString(b) }
             if let c = o["charset"] as? String { charset = c }
             if let h = o["headers"] as? [String: Any] { for (k, v) in h { headers[k] = "\(v)" } }
+            if let w = o["webView"] {
+                if let b = w as? Bool { webView = b }
+                else if let n = w as? NSNumber { webView = n.boolValue }
+                else if let t = w as? String { webView = !t.isEmpty && t.lowercased() != "false" }
+                else { webView = !(w is NSNull) }
+            }
         }
     }
 
@@ -136,6 +146,12 @@ struct AnalyzeUrl {
     }
 
     func fetch() async throws -> (String, String) {
+        #if canImport(UIKit) && canImport(WebKit)
+        if webView || (webJs?.isEmpty == false) {
+            return try await WebViewLoader.load(url: url, method: method, body: body.map { percentEncodedBody($0) },
+                                                headers: headers, js: webJs)
+        }
+        #endif
         let finalUrl = url.contains("%") ? url : percentEncoded(url)
         guard let u = URL(string: finalUrl) else { throw URLError(.badURL) }
         var req = URLRequest(url: u, timeoutInterval: 20)
@@ -157,6 +173,15 @@ struct AnalyzeUrl {
         if charset == nil, enc == .utf8, let t = text, t.range(of: "charset=[\"']?gb", options: [.regularExpression, .caseInsensitive]) != nil {
             text = String(data: data, encoding: AnalyzeUrl.encoding("gbk")) ?? t
         }
+        #if canImport(UIKit) && canImport(WebKit)
+        // 遇到 Cloudflare 等人机验证页，自动改用 WebView 加载（必要时弹出网页让用户验证）
+        if WebViewSupport.isChallenge(text ?? "") {
+            if let r = try? await WebViewLoader.load(url: finalUrl, method: method, body: body.map { percentEncodedBody($0) },
+                                                     headers: headers, js: webJs), !r.0.isEmpty {
+                return r
+            }
+        }
+        #endif
         return (text ?? "", resp.url?.absoluteString ?? url)
     }
 
