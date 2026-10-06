@@ -153,7 +153,9 @@ final class AnalyzeRule {
     // MARK: - String rules
 
     private func stringValue(_ obj: Any, _ rawRule: String) -> String {
-        var rule = rawRule
+        // 模板中的 ##（如 {{$.docId##.*_}}）必须先在模板内部处理，
+        // 不能被误判成整条 URL/正文规则的净化表达式。
+        var rule = rawRule.contains("{{") ? template(obj, rawRule) : rawRule
         var regex: String? = nil, repl = "", firstOnly = false
         if let r = rule.range(of: "##") {
             let tail = String(rule[r.upperBound...])
