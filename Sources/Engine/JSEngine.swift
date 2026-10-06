@@ -60,7 +60,7 @@ import SwiftSoup
     func connectNative(_ url: String) -> StrResponse {
         let sem = DispatchSemaphore(value: 0)
         var result: (String, String) = ("", "")
-        var au = AnalyzeUrl(rawUrl: url, baseUrl: context?.source?.bookSourceUrl, sourceHeader: context?.source?.header, context: context)
+        var au = AnalyzeUrl(rawUrl: url, baseUrl: context?.source?.bookSourceUrl, sourceHeader: context?.source?.header, context: context, jsLib: context?.source?.jsLib)
         Task.detached {
             result = (try? await au.fetch()) ?? ("", "")
             sem.signal()
@@ -108,7 +108,7 @@ import SwiftSoup
 
     func httpGetNative(_ url: String, _ headersJSON: String) -> StrResponse {
         let au = AnalyzeUrl(rawUrl: url, baseUrl: context?.source?.bookSourceUrl,
-                            sourceHeader: headersJSON, context: context)
+                            sourceHeader: headersJSON, context: context, jsLib: context?.source?.jsLib)
         return fetchResponse(au, fallbackURL: url)
     }
 
@@ -280,8 +280,9 @@ final class JSEngine {
     }
 
     func evalString(_ script: String, result: Any? = nil, baseUrl: String? = nil,
-                    vars: [String: Any] = [:], context: RuleContext? = nil) -> String? {
-        guard let v = eval(script, result: result, baseUrl: baseUrl, vars: vars, context: context) else { return nil }
+                    vars: [String: Any] = [:], jsLib: String? = nil,
+                    context: RuleContext? = nil) -> String? {
+        guard let v = eval(script, result: result, baseUrl: baseUrl, vars: vars, jsLib: jsLib, context: context) else { return nil }
         if let s = v as? String { return s }
         if let a = v as? [Any] { return a.map { "\($0)" }.joined(separator: "\n") }
         if JSONSerialization.isValidJSONObject(v), let d = try? JSONSerialization.data(withJSONObject: v) {

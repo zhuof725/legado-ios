@@ -12,14 +12,16 @@ struct AnalyzeUrl {
     /// ruleContent.webJs：WebView 加载后执行的 JS
     var webJs: String?
     let context: RuleContext?
+    let jsLib: String?
 
     init(rawUrl: String, key: String? = nil, page: Int = 1, baseUrl: String? = nil,
-         sourceHeader: String? = nil, context: RuleContext? = nil) {
+         sourceHeader: String? = nil, context: RuleContext? = nil, jsLib: String? = nil) {
         self.context = context
+        self.jsLib = jsLib
         var s = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         // @js: / <js></js> 先执行，再做模板替换（与 Legado 一致）
-        s = AnalyzeUrl.evalUrlJS(s, key: key, page: page, baseUrl: baseUrl, context: context)
-        s = AnalyzeUrl.substitute(s, key: key, page: page, context: context)
+        s = AnalyzeUrl.evalUrlJS(s, key: key, page: page, baseUrl: baseUrl, context: context, jsLib: jsLib)
+        s = AnalyzeUrl.substitute(s, key: key, page: page, context: context, jsLib: jsLib)
         // <1,2,3> page selection
         if let r = s.range(of: "<[^>]+>", options: .regularExpression) {
             let items = s[r].dropFirst().dropLast().split(separator: ",").map(String.init)
@@ -64,13 +66,13 @@ struct AnalyzeUrl {
     }
 
     /// 执行 URL 规则里的 @js: 和 <js></js>，返回最终的 URL 字符串
-    static func evalUrlJS(_ raw: String, key: String?, page: Int, baseUrl: String?, context: RuleContext? = nil) -> String {
+    static func evalUrlJS(_ raw: String, key: String?, page: Int, baseUrl: String?, context: RuleContext? = nil, jsLib: String? = nil) -> String {
         guard raw.contains("<js>") || raw.range(of: "@js:", options: .caseInsensitive) != nil else { return raw }
         var result = ""
         var rest = raw
         let vars: [String: Any] = ["key": key ?? "", "page": page, "searchKey": key ?? "", "searchPage": page]
         func run(_ js: String) {
-            let v = JSEngine.shared.eval(js, result: result, baseUrl: baseUrl ?? "", vars: vars, context: context)
+            let v = JSEngine.shared.eval(js, result: result, baseUrl: baseUrl ?? "", vars: vars, jsLib: jsLib, context: context)
             result = v.map { AnalyzeRule.asString($0) } ?? ""
         }
         while let r = rest.range(of: "<js>") {
@@ -92,7 +94,7 @@ struct AnalyzeUrl {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func substitute(_ s: String, key: String?, page: Int, context: RuleContext? = nil) -> String {
+    static func substitute(_ s: String, key: String?, page: Int, context: RuleContext? = nil, jsLib: String? = nil) -> String {
         let k = key ?? ""
         guard let re = try? NSRegularExpression(pattern: "\\{\\{([\\s\\S]*?)\\}\\}") else { return s }
         var result = s
@@ -107,7 +109,7 @@ struct AnalyzeUrl {
             else if js == "page" { value = "\(page)" }
             else if js == "host" || js == "baseUrl" { value = context?.source?.bookSourceUrl ?? "" }
             else if js.hasPrefix("@get:") { value = context?.get(String(js.dropFirst(5))) ?? "" }
-            else { value = JSEngine.shared.evalString(js, vars: ["key": k, "page": page], context: context) ?? "" }
+            else { value = JSEngine.shared.evalString(js, vars: ["key": k, "page": page], jsLib: jsLib, context: context) ?? "" }
             result = (result as NSString).replacingCharacters(in: match.range, with: value)
         }
         return result.replacingOccurrences(of: "{key}", with: k)

@@ -39,7 +39,7 @@ for s in sources {
     print("  searchUrl: \(short(s.searchUrl, 120))")
     do {
         let result: String = try await withTimeout(perSourceTimeout) {
-            let au = AnalyzeUrl(rawUrl: s.searchUrl ?? "", key: key, page: 1, baseUrl: s.bookSourceUrl, sourceHeader: s.header)
+            let au = AnalyzeUrl(rawUrl: s.searchUrl ?? "", key: key, page: 1, baseUrl: s.bookSourceUrl, sourceHeader: s.header, context: RuleContext(source: s), jsLib: s.jsLib)
             print("  请求: \(au.method) \(short(au.url, 150))  charset=\(au.charset ?? "-") body=\(short(au.body, 80))")
             let (body, finalUrl) = try await au.fetch()
             print("  响应: \(body.count) 字符, url=\(short(finalUrl, 100)), 开头: \(short(body, 120))")
