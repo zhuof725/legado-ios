@@ -165,6 +165,14 @@ struct AnalyzeUrl {
     }
 
     func fetch() async throws -> (String, String) {
+        if url.hasPrefix("data:") {
+            var payload = ""
+            if let r = url.range(of: "base64,") { payload = String(url[r.upperBound...]) }
+            payload = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+            while payload.count % 4 != 0 { payload += "=" }
+            let bytes = Data(base64Encoded: payload) ?? Data()
+            return (bytes.map { String(format: "%02x", $0) }.joined(), url)
+        }
         #if canImport(UIKit) && canImport(WebKit)
         if webView || (webJs?.isEmpty == false) {
             return try await WebViewLoader.load(url: url, method: method, body: body.map { percentEncodedBody($0) },

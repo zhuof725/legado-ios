@@ -85,17 +85,7 @@ final class AnalyzeRule {
 
     static func jsValue(_ v: Any) -> Any {
         if let e = v as? Element { return (try? e.outerHtml()) ?? "" }
-        if v is [String: Any], JSONSerialization.isValidJSONObject(v),
-           let d = try? JSONSerialization.data(withJSONObject: v), let s = String(data: d, encoding: .utf8) {
-            return s
-        }
-        if let a = v as? [Any] {
-            if !a.contains(where: { $0 is Element }), JSONSerialization.isValidJSONObject(a),
-               let d = try? JSONSerialization.data(withJSONObject: a), let s = String(data: d, encoding: .utf8) {
-                return s
-            }
-            return a.map { jsValue($0) }
-        }
+        if let a = v as? [Any] { return a.map { jsValue($0) } }
         return v
     }
 

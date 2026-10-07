@@ -159,6 +159,7 @@ final class JSEngine {
     static var currentSource: BookSource?
 
     private static let prelude = """
+    (function(){var __jp=JSON.parse;JSON.parse=function(s,r){if(s!==null&&typeof s==='object'){return s;}return __jp(String(s),r);};})();
     var cookie={getCookie:function(){return ''},getKey:function(){return ''},removeCookie:function(){},setCookie:function(){},replaceCookie:function(){}};
     var cache={get:function(k){return java.storeGet(k)},put:function(k,v){return java.storePut(k,String(v))},getFromMemory:function(k){return java.storeGet(k)},putMemory:function(k,v){return java.storePut(k,String(v))}};
     var source={bookSourceUrl:'',bookSourceName:'',bookSourceComment:'',getKey:function(){return this.bookSourceUrl},getVariable:function(){return java.storeGet('__var_'+this.bookSourceUrl)},setVariable:function(v){java.storePut('__var_'+this.bookSourceUrl,String(v))},put:function(k,v){return java.storePut(k,String(v))},get:function(k){return java.storeGet(k)}};
