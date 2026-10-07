@@ -357,6 +357,12 @@ final class JSEngine {
     java.startBrowserAwait=function(u,t){return java.connect(String(u))};
     java.showBrowser=function(u,h,js,cfg){if(typeof __openBrowser==='function'){__openBrowser(String(u||''),'');}return '';};
     java.sleep=function(ms){return '';};
+    java.getWebViewUA=function(){return 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';};
+    java.showReadingBrowser=function(u,t){if(typeof __openBrowser==='function'){__openBrowser(String(u||''),String(t||''));}return '';};
+    java.startBrowserDp=function(u,t){if(typeof __openBrowser==='function'){__openBrowser(String(u||''),String(t||''));}return '';};
+    java.open=function(){return '';};
+    java.searchBook=function(){return '';};
+    java.qread=function(){return '';};
     java.getThemeConfig=function(){return 'light';};
     java.startBrowser=function(u,t){if(typeof __openBrowser==='function'){__openBrowser(String(u),String(t||''));}return ''};
     java.webView=function(h,u,js){return java.ajax(String(u))};
