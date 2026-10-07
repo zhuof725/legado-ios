@@ -66,6 +66,14 @@ enum LocalBook {
             if isChapterTitle(line) { flush(); curTitle = line.trimmingCharacters(in: .whitespaces) } else { buf.append(line) }
         }
         flush()
+        // 第一个标题之前的「前言」如果只有寥寥几行（多半是书名、作者这种头部信息），不单独成章，
+        // 并尝试从中补全书名与作者。
+        if chapters.count > 1, chapters[0].title == "前言", chapters[0].text.count <= 80 {
+            let head = chapters.removeFirst().text
+            if author.isEmpty, let m = try? NSRegularExpression(pattern: "作者[：:\\s]*([^\\n]+)").firstMatch(in: head, range: NSRange(location: 0, length: (head as NSString).length)) {
+                author = (head as NSString).substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
+            }
+        }
         // 没识别出任何章节标题：按固定字数切段，避免整本是一章。
         if chapters.count <= 1 {
             chapters = splitBySize(text, size: 5000)

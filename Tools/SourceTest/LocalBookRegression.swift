@@ -19,6 +19,13 @@ enum LocalBookRegression {
         check(gbk.title == "测试书" && gbk.author == "张三", "TXT：文件名解析书名与作者")
         check(gbk.chapters.map(\.title) == ["序章", "第一章 出发", "第二章 到达"], "TXT：GBK 解码并按标题切章")
         check(gbk.chapters[1].text == "他出发了。", "TXT：章节正文不含标题行")
+        // 开头只有书名/作者行时不单独成「前言」，且能补全作者
+        let headOnly = try LocalBook.parseTXT(try load("sample-gbk.txt"), fileName: "无信息.txt")
+        check(headOnly.author == "张三" && headOnly.chapters.first?.title == "序章", "TXT：开头的书名作者行不成章，并补全作者")
+        // 较长的前言保留为一章
+        let longPre = String(repeating: "这是一段较长的前言文字。", count: 12) + "\n第一章 开始\n正文\n第二章 继续\n更多"
+        let keep = try LocalBook.parseTXT(Data(longPre.utf8), fileName: "书.txt")
+        check(keep.chapters.first?.title == "前言" && keep.chapters.count == 3, "TXT：较长的前言保留为一章")
 
         // 无章节、带 BOM：按字数切段
         let plain = try LocalBook.parseTXT(try load("sample-plain.txt"), fileName: "随笔.txt")
