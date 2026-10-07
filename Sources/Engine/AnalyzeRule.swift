@@ -503,7 +503,7 @@ enum JsonPath {
         guard !t.isEmpty, !t.contains(" ") && !t.contains("@") && !t.contains("#") else { return false }
         if t.hasPrefix("$") { return true }
         if t.hasPrefix(".") || t.hasPrefix("/") || t.hasPrefix(":") || t.hasPrefix("<") { return false }
-        return t.range(of: "^[A-Za-z0-9_\[\]'\s\.\-]+$", options: .regularExpression) != nil
+        return t.range(of: "^[A-Za-z0-9_\\[\\]'\\s\\.\\-]+$", options: .regularExpression) != nil
     }
 
     private static func readKey(_ p: String, _ i: inout String.Index) -> String {
