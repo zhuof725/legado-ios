@@ -72,6 +72,26 @@ enum CookieBridgeRegression {
         }
 
         check(run("""
+            [cookie.setCookie(cookieURL,'side=effect') === undefined,
+             cookie.replaceCookie(cookieURL,'other=effect') === undefined,
+             cookie.removeCookie(cookieURL) === undefined].every(function(x){return x;});
+            """, engineA) == "true", "Cookie mutation APIs return undefined like Kotlin Unit")
+        let templateURL = "https://template-" + UUID().uuidString.lowercased() + ".invalid"
+        let templateData = try JSONSerialization.data(withJSONObject: [
+            "bookSourceUrl": templateURL, "bookSourceName": "URL side-effect regression"
+        ])
+        let templateSource = try JSONDecoder().decode(BookSource.self, from: templateData)
+        let templateContext = RuleContext(source: templateSource)
+        // Same shape as the unmodified biquge345 searchUrl. Only removes a unique
+        // synthetic host with no credentials; no request is made by AnalyzeUrl.init.
+        let sideEffectRequest = AnalyzeUrl(
+            rawUrl: "{{cookie.removeCookie(source.getKey())}}\n" + templateURL + "/s.php,{\"method\":\"POST\",\"body\":\"s={{key}}\"}",
+            key: "测试", baseUrl: templateURL, context: templateContext)
+        check(sideEffectRequest.url == templateURL + "/s.php"
+              && sideEffectRequest.method == "POST" && sideEffectRequest.body == "s=测试",
+              "biquge345 Cookie removal URL template emits no true prefix")
+
+        check(run("""
             cookie.setCookie(cookieURL,'first=one; stale=two');
             cookie.replaceCookie(cookieURL,'first=three; token=x=y==; empty=');
             cookie.getKey(cookieURL,'first')==='three' &&

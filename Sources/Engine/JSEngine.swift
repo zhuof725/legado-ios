@@ -228,9 +228,10 @@ final class JSEngine {
     var cookie={
         getCookie:function(u){return String(__cookieGet(String(u)));},
         getKey:function(u,k){return String(__cookieGetKey(String(u),String(k)));},
-        setCookie:function(u,v){return __cookieSet(String(u),v==null?'':String(v));},
-        replaceCookie:function(u,v){return __cookieReplace(String(u),v==null?'':String(v));},
-        removeCookie:function(u){return __cookieRemove(String(u));},
+        // Kotlin returns Unit: template side effects must not insert "true" into URLs.
+        setCookie:function(u,v){__cookieSet(String(u),v==null?'':String(v));},
+        replaceCookie:function(u,v){__cookieReplace(String(u),v==null?'':String(v));},
+        removeCookie:function(u){__cookieRemove(String(u));},
         cookieToMap:function(v){
             var parsed=JSON.parse(String(__cookieToMap(v==null?'':String(v))));
             var map=Object.create(null);
