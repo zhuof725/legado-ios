@@ -210,8 +210,15 @@ enum SourceCrypto {
         private func run(_ data: Data, encrypt: Bool) throws -> Data {
             if !padded && !encrypt && data.count % blockSize != 0 { throw CryptoError.invalidInput }
             if !padded && encrypt && data.count % blockSize != 0 { throw CryptoError.invalidInput }
-            var options: CCOptions = padded ? CCOptions(kCCOptionPKCS7Padding) : 0
+            // Encryption lets CommonCrypto add padding. Decryption runs unpadded and the
+            // padding is validated here: CommonCrypto does not reliably report a bad
+            // PKCS7 tail, so a wrong key would otherwise return garbage as a success.
+            let cryptoPadding = padded && encrypt
+            var options: CCOptions = cryptoPadding ? CCOptions(kCCOptionPKCS7Padding) : 0
             if !cbc { options |= CCOptions(kCCOptionECBMode) }
+            if padded && !encrypt && (data.isEmpty || data.count % blockSize != 0) {
+                throw CryptoError.invalidInput
+            }
             var out = Data(count: data.count + blockSize)
             var moved = 0
             let outCapacity = out.count
@@ -234,6 +241,16 @@ enum SourceCrypto {
             }
             guard status == CCCryptorStatus(kCCSuccess) else { throw CryptoError.operationFailed }
             out.removeSubrange(moved..<out.count)
+            if padded && !encrypt {
+                // PKCS5/PKCS7: last byte n in 1...blockSize and the last n bytes all equal n.
+                guard let last = out.last else { throw CryptoError.operationFailed }
+                let n = Int(last)
+                guard n >= 1, n <= blockSize, n <= out.count,
+                      out.suffix(n).allSatisfy({ $0 == last }) else {
+                    throw CryptoError.operationFailed
+                }
+                out.removeLast(n)
+            }
             return out
         }
 

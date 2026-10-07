@@ -53,6 +53,27 @@ enum SourceCryptoRegression {
             check(false, "cipher construction for decrypt vectors")
         }
 
+        // Padding is validated by this code, not trusted to CommonCrypto.
+        // 16 bytes ending in 0x01 is valid padding; 0x00 and 0x11 are not (pycryptodome agrees).
+        if let np = try? SourceCrypto.Cipher(transformation: "AES/ECB/PKCS5Padding", key: key, iv: nil),
+           let raw = try? SourceCrypto.Cipher(transformation: "AES/ECB/NoPadding", key: key, iv: nil) {
+            func tail(_ last: UInt8) -> Data {
+                var block = Data(repeating: 0x41, count: 15); block.append(last)
+                return (try? raw.encrypt(block)) ?? Data()
+            }
+            check((try? np.decrypt(tail(0x01))) == Data(repeating: 0x41, count: 15), "padding byte 0x01 is stripped")
+            check((try? np.decrypt(tail(0x00))) == nil, "padding byte 0x00 is rejected")
+            check((try? np.decrypt(tail(0x11))) == nil, "padding byte larger than the block is rejected")
+            var inconsistent = Data(repeating: 0x41, count: 14); inconsistent.append(contentsOf: [0x07, 0x02])
+            check((try? np.decrypt((try? raw.encrypt(inconsistent)) ?? Data())) == nil, "padding bytes that disagree are rejected")
+            check((try? np.decrypt(Data())) == nil, "empty ciphertext is rejected")
+            var full = Data(repeating: 0x10, count: 16)
+            check((try? np.decrypt((try? raw.encrypt(full)) ?? Data())) == Data(), "a full padding block yields empty plaintext")
+            full.removeAll()
+        } else {
+            check(false, "cipher construction for padding checks")
+        }
+
         // Rejections are explicit.
         func rejects(_ t: String, _ k: Int, _ i: Int?, _ expected: SourceCrypto.CryptoError, _ label: String) {
             do {
