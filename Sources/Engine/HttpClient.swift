@@ -22,6 +22,7 @@ struct AnalyzeUrl {
         // @js: / <js></js> 先执行，再做模板替换（与 Legado 一致）
         s = AnalyzeUrl.evalUrlJS(s, key: key, page: page, baseUrl: baseUrl, context: context, jsLib: jsLib)
         s = AnalyzeUrl.substitute(s, key: key, page: page, context: context, jsLib: jsLib)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         // <1,2,3> page selection
         if let r = s.range(of: "<[^>]+>", options: .regularExpression) {
             let items = s[r].dropFirst().dropLast().split(separator: ",").map(String.init)
@@ -107,7 +108,10 @@ struct AnalyzeUrl {
             let value: String
             if js == "key" { value = k }
             else if js == "page" { value = "\(page)" }
-            else if js == "host" || js == "baseUrl" { value = context?.source?.bookSourceUrl ?? "" }
+            else if js == "baseUrl" { value = AnalyzeUrl.cleanSourceUrl(context?.source?.bookSourceUrl ?? "") }
+            else if js == "host" && (jsLib ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                value = AnalyzeUrl.cleanSourceUrl(context?.source?.bookSourceUrl ?? "")
+            }
             else if js.hasPrefix("@get:") { value = context?.get(String(js.dropFirst(5))) ?? "" }
             else { value = JSEngine.shared.evalString(js, vars: ["key": k, "page": page], jsLib: jsLib, context: context) ?? "" }
             result = (result as NSString).replacingCharacters(in: match.range, with: value)
@@ -116,9 +120,16 @@ struct AnalyzeUrl {
             .replacingOccurrences(of: "{page}", with: "\(page)")
     }
 
+    /// 书源地址里 # 之后是备注（如 https://x.com#🎃、https://x.com##），请求时去掉
+    static func cleanSourceUrl(_ s: String) -> String {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let i = t.firstIndex(of: "#") { return String(t[..<i]) }
+        return t
+    }
+
     static func absolute(_ s: String, base: String?) -> String {
         if s.hasPrefix("http://") || s.hasPrefix("https://") || s.hasPrefix("data:") { return s }
-        guard let b = base, let bu = URL(string: b) else { return s }
+        guard let b = base.map({ AnalyzeUrl.cleanSourceUrl($0) }), let bu = URL(string: b) else { return s }
         return URL(string: s, relativeTo: bu)?.absoluteString ?? s
     }
 
