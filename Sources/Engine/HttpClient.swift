@@ -185,6 +185,9 @@ struct AnalyzeUrl {
         req.httpMethod = method
         req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        if req.value(forHTTPHeaderField: "Referer") == nil, let host = URL(string: finalUrl)?.host {
+            req.setValue("\(u.scheme ?? "https")://\(host)/", forHTTPHeaderField: "Referer")
+        }
         if let b = body {
             req.httpBody = percentEncodedBody(b).data(using: .utf8)
             if req.value(forHTTPHeaderField: "Content-Type") == nil {

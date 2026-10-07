@@ -256,6 +256,10 @@ final class AnalyzeRule {
     private func singleString(_ obj: Any, _ r: String) -> String {
         let rule = r.trimmingCharacters(in: .whitespacesAndNewlines)
         if rule.isEmpty { return "" }
+        // JSON 对象上的简写字段名（Legado 教程的 body.books / author 写法）
+        if (obj is [String: Any] || obj is [Any]), JsonPath.isSimpleKeyRule(rule) {
+            return JsonPath.query(obj, rule).map { AnalyzeRule.asString($0) }.joined(separator: "\n")
+        }
         if isJsonRule(rule, obj) {
             return JsonPath.query(jsonRoot(obj), stripPrefix(rule)).map { AnalyzeRule.asString($0) }.joined(separator: "\n")
         }
@@ -322,6 +326,9 @@ final class AnalyzeRule {
     }
 
     private func defaultElements(_ obj: Any, _ rule: String) -> [Element] {
+        if (obj is [String: Any] || obj is [Any]), JsonPath.isSimpleKeyRule(rule) {
+            return JsonPath.query(obj, rule) as? [Element] ?? []
+        }
         guard let root = AnalyzeRule.element(obj) else { return [] }
         var cur: [Element] = [root]
         for seg in rule.components(separatedBy: "@") where !seg.isEmpty {
@@ -488,6 +495,15 @@ enum JsonPath {
             if op == "!=" { return actual != expected }
             return actual.localizedCaseInsensitiveContains(expected)
         }
+    }
+
+    /// 简写键规则：仅允许字段名、点号字段、数组下标，避免把 CSS/XPath 当 JSONPath。
+    static func isSimpleKeyRule(_ rule: String) -> Bool {
+        let t = rule.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, !t.contains(" ") && !t.contains("@") && !t.contains("#") else { return false }
+        if t.hasPrefix("$") { return true }
+        if t.hasPrefix(".") || t.hasPrefix("/") || t.hasPrefix(":") || t.hasPrefix("<") { return false }
+        return t.range(of: "^[A-Za-z0-9_\[\]'\s\.\-]+$", options: .regularExpression) != nil
     }
 
     private static func readKey(_ p: String, _ i: inout String.Index) -> String {

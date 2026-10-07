@@ -61,6 +61,11 @@ enum XPathRule {
                 if let h = n.toHTML, h.hasPrefix("<") { out.append(h) }
                 else if let t = n.text { out.append(t) }
             }
+            if out.isEmpty {
+                let s = fallbackString(obj, path)
+                return s.isEmpty ? [] : s.components(separatedBy: "
+").filter { !$0.isEmpty }
+            }
             return out
         default: return []
         }
@@ -116,7 +121,7 @@ enum XPathRule {
                 let v: String? = output == .html ? n.innerHTML : n.text
                 if let s = v?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { list.append(s) }
             }
-            return list.joined(separator: "\n")
+            return list.isEmpty ? fallbackString(obj, path) : list.joined(separator: "\n")
         default: return ""
         }
     }
