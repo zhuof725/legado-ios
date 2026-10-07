@@ -220,9 +220,9 @@ final class JSEngine {
         self.responseTimeout = responseTimeout
     }
 
-    /// 登录信息仅存内存（重启丢失），按书源完整标识隔离。
+    /// 登录信息持久化到 Application Support（重启保留），按书源完整标识隔离。
     static let loginStore = SourceLoginStore(
-        backing: InMemorySourceLoginBackingStore(),
+        backing: PersistentLoginBackingStore(fileURL: PersistentLoginBackingStore.defaultFileURL()),
         cookieReplacer: { key, cookie in
             let url = key.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? key
             try SourceCookieStore(storage: HTTPCookieStorage.shared).replaceCookie(url, cookie)
