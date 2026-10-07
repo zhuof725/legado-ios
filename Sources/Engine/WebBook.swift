@@ -55,10 +55,17 @@ enum WebBook {
                 root = parsedArray
             }
         }
+        if let root = root {
+            if let dict = root as? [String: Any] {
+                DebugLog.add("详情 init 字段：" + dict.keys.sorted().joined(separator: ", "))
+            } else { DebugLog.add("详情 init 类型：\(type(of: root))") }
+        } else if rule.`init`?.isEmpty == false {
+            DebugLog.add("详情 init 未匹配，后续字段仍使用原响应")
+        }
         func s(_ r: String?) -> String { ar.getString(r, from: root) }
         let n = s(rule.name); if !n.isEmpty { b.name = n }
         let a = s(rule.author); if !a.isEmpty { b.author = a }
-        if let v = nilIfEmpty(s(rule.intro)) { b.intro = v }
+        if let v = nilIfEmpty(s(rule.intro)) { b.intro = displayIntro(v) }
         if let v = nilIfEmpty(s(rule.kind)) { b.kind = v }
         if let v = nilIfEmpty(s(rule.lastChapter)) { b.lastChapter = v }
         if let v = nilIfEmpty(s(rule.wordCount)) { b.wordCount = v }
@@ -83,7 +90,9 @@ enum WebBook {
             let au = AnalyzeUrl(rawUrl: u, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: RuleContext(source: source, book: book), jsLib: source.jsLib)
             let (body, url) = try await au.fetch()
             let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: RuleContext(source: source, book: book))
-            for item in ar.getElements(listRule) {
+            let nodes = ar.getElements(listRule)
+            DebugLog.add("目录列表匹配：\(nodes.count) 项（第\(visited.count)页）")
+            for item in nodes {
                 let title = ar.getString(rule.chapterName, from: item)
                 if title.isEmpty { continue }
                 let vol = ar.getString(rule.isVolume, from: item)
@@ -131,6 +140,17 @@ enum WebBook {
             text = AnalyzeRule(content: text, baseUrl: chapter.url, context: RuleContext(source: source, chapter: chapter)).getString(rr.hasPrefix("##") ? rr : "##" + rr, from: text)
         }
         return cleanText(text)
+    }
+
+    static func displayIntro(_ text: String) -> String {
+        var value = text
+            .replacingOccurrences(of: "<br\\s*/?>|</p>", with: "\n", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        for (entity, decoded) in [("&nbsp;", " "), ("&shy;", ""), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\"")] {
+            value = value.replacingOccurrences(of: entity, with: decoded)
+        }
+        return value.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
     static func cleanText(_ s: String) -> String {

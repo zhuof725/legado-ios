@@ -24,7 +24,7 @@ import WebKit
 @MainActor
 final class WebViewLoader: NSObject, WKNavigationDelegate {
     /// 由 UI 层设置：需要用户手动验证时调用，返回验证后的网页源码
-    static var interactiveHandler: ((URL) async -> String?)?
+    static var interactiveHandler: ((WKWebView) async -> String?)?
 
     private let webView: WKWebView
     private var loadedOnce = false
@@ -48,6 +48,9 @@ final class WebViewLoader: NSObject, WKNavigationDelegate {
                      timeout: Double = 25, allowInteractive: Bool = true) async throws -> (String, String) {
         guard let u = URL(string: url) else { throw URLError(.badURL) }
         let loader = WebViewLoader()
+        if let agent = headers.first(where: { $0.key.lowercased() == "user-agent" })?.value {
+            loader.webView.customUserAgent = agent
+        }
         await syncCookiesToWebView(for: u)
         var req = URLRequest(url: u, timeoutInterval: timeout)
         req.httpMethod = method
@@ -76,14 +79,21 @@ final class WebViewLoader: NSObject, WKNavigationDelegate {
         }
         var finalUrl = loader.webView.url?.absoluteString ?? url
         if WebViewSupport.isChallenge(html), allowInteractive, let handler = interactiveHandler {
-            if let h = await handler(u) { html = h }
-            finalUrl = url
+            if let h = await handler(loader.webView) { html = h }
+            finalUrl = loader.webView.url?.absoluteString ?? url
         }
         await syncCookiesFromWebView()
         if let js = js, !js.isEmpty, !WebViewSupport.isChallenge(html) {
             let r = await loader.source(js: js)
             if !r.isEmpty { html = r }
+        } else if !WebViewSupport.isChallenge(html) {
+            // WKWebView 展示 JSON 时返回的 outerHTML 包含 <pre>，使用纯文本还原 API 响应。
+            let plain = await loader.source(js: "document.body ? document.body.innerText : ''")
+            if let data = plain.data(using: .utf8), (try? JSONSerialization.jsonObject(with: data)) != nil {
+                html = plain
+            }
         }
+        DebugLog.add("WebView 返回：\(html.utf8.count) 字节；\(DebugLog.summary(html))")
         return (html, finalUrl)
     }
 

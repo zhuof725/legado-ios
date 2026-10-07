@@ -214,7 +214,11 @@ final class JSEngine {
 
     private func makeContext(_ context: RuleContext? = nil) -> JSContext {
         let ctx = JSContext()!
-        ctx.exceptionHandler = { _, e in print("[JS error] \(e?.toString() ?? "")") }
+        ctx.exceptionHandler = { _, e in
+            let message = e?.toString() ?? "未知脚本异常"
+            print("[JS error] \(message)")
+            DebugLog.add("JS 错误：\(String(message.prefix(240)))")
+        }
         ctx.setObject(JavaBridge(context: context), forKeyedSubscript: "java" as NSString)
         ctx.evaluateScript(JSEngine.prelude)
         let source = context?.source ?? JSEngine.currentSource

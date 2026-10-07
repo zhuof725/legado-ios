@@ -67,6 +67,14 @@ final class AnalyzeRule {
         return parts
     }
 
+    private func resolvedHost() -> String {
+        if let lib = jsLib, !lib.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let host = JSEngine.shared.evalString("typeof host === 'undefined' ? '' : String(host)", jsLib: lib, context: context), !host.isEmpty {
+            return host
+        }
+        return context.get("host")
+    }
+
     private func runJS(_ js: String, _ input: Any) -> Any {
         let expanded = expandEmbeddedTemplates(js, input: input)
         return JSEngine.shared.eval(expanded, result: jsInput(input), baseUrl: baseUrl, jsLib: jsLib, rule: self, ruleInput: input, context: context) ?? ""
@@ -82,7 +90,7 @@ final class AnalyzeRule {
             let expression = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
             let value: String
             if expression == "baseUrl" { value = baseUrl }
-            else if expression == "host" { value = context.get("host") }
+            else if expression == "host" { value = resolvedHost() }
             else if expression.hasPrefix("@get:") { value = context.get(String(expression.dropFirst(5))) }
             else if expression.hasPrefix("@") || expression.hasPrefix("$." ) || expression.hasPrefix("$[") || expression.hasPrefix("//") {
                 value = singleString(input, expression.hasPrefix("@@") ? String(expression.dropFirst(2)) : expression)
@@ -232,7 +240,7 @@ final class AnalyzeRule {
         replaceBraces(rule, pattern: "\\{\\{([\\s\\S]*?)\\}\\}") { inner in
             let t = inner.trimmingCharacters(in: .whitespaces)
             if t == "baseUrl" { return baseUrl }
-            if t == "host" || t == "{{host}}" { return context.get("host") }
+            if t == "host" { return resolvedHost() }
             if t.hasPrefix("@get:") { return context.get(String(t.dropFirst(5))) }
             if t.hasPrefix("@") || t.hasPrefix("$.") || t.hasPrefix("$[") || t.hasPrefix("//") {
                 let rule = t.hasPrefix("@@") ? String(t.dropFirst(2)) : t
@@ -450,7 +458,10 @@ enum JsonPath {
                 cur = cur.flatMap { deep($0, key) }
             } else if p[i] == "." {
                 i = p.index(after: i)
+                // Legado 允许 $.[*]、$.chapters.[*]；这里的点不能产生空字段。
+                if i < p.endIndex && p[i] == "[" { continue }
                 let key = readKey(p, &i)
+                if key.isEmpty { continue }
                 cur = cur.flatMap { child($0, key) }
             } else if p[i] == "[" {
                 guard let end = p[i...].firstIndex(of: "]") else { break }

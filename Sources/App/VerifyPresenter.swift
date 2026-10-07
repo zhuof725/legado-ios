@@ -8,10 +8,10 @@ enum VerifyPresenter {
     private static var busy = false
 
     static func install() {
-        WebViewLoader.interactiveHandler = { url in await present(url) }
+        WebViewLoader.interactiveHandler = { webView in await present(webView) }
     }
 
-    static func present(_ url: URL) async -> String? {
+    static func present(_ webView: WKWebView) async -> String? {
         if busy { return nil }
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard let win = scenes.flatMap({ $0.windows }).first(where: { $0.isKeyWindow }) ?? scenes.first?.windows.first,
@@ -21,7 +21,7 @@ enum VerifyPresenter {
         busy = true
         defer { busy = false }
         return await withCheckedContinuation { c in
-            let vc = VerifyViewController(url: url) { html in c.resume(returning: html) }
+            let vc = VerifyViewController(webView: webView) { html in c.resume(returning: html) }
             let nav = UINavigationController(rootViewController: vc)
             nav.modalPresentationStyle = .fullScreen
             top.present(nav, animated: true)
@@ -30,19 +30,12 @@ enum VerifyPresenter {
 }
 
 final class VerifyViewController: UIViewController {
-    private let url: URL
+    private let webView: WKWebView
     private let onFinish: (String?) -> Void
     private var finished = false
-    private lazy var webView: WKWebView = {
-        let cfg = WKWebViewConfiguration()
-        cfg.websiteDataStore = .default()
-        let w = WKWebView(frame: .zero, configuration: cfg)
-        w.customUserAgent = WebViewSupport.userAgent
-        return w
-    }()
 
-    init(url: URL, onFinish: @escaping (String?) -> Void) {
-        self.url = url
+    init(webView: WKWebView, onFinish: @escaping (String?) -> Void) {
+        self.webView = webView
         self.onFinish = onFinish
         super.init(nibName: nil, bundle: nil)
     }
@@ -54,11 +47,14 @@ final class VerifyViewController: UIViewController {
         view.backgroundColor = .systemBackground
         webView.frame = view.bounds
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        webView.removeFromSuperview()
+        webView.alpha = 1
+        webView.isUserInteractionEnabled = true
         view.addSubview(webView)
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: "取消", style: .plain, target: self, action: #selector(cancelTapped))
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "完成", style: .done, target: self, action: #selector(doneTapped))
         navigationItem.prompt = "按网页提示完成验证，看到正常页面后点「完成」"
-        webView.load(URLRequest(url: url))
+        // 复用 loader 已加载的页面，不重新 load（否则会丢失 POST 和 Cookie 上下文）。
     }
 
     @objc private func cancelTapped() { finish(nil) }

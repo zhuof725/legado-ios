@@ -1,0 +1,45 @@
+{
+  "bookSourceUrl": "https://www.min-yuan.com/",
+  "bookSourceName": "小原文学网",
+  "bookSourceGroup": "常规",
+  "bookSourceType": 0,
+  "enabled": true,
+  "searchUrl": "https://min-yuan.com/search/,{\n  \"method\": \"POST\",\n  \"body\": \"searchkey={{key}}\",\n  \"headers\": {\n    \"Referer\": \"https://min-yuan.com/\",\n    \"User-Agent\": \"Chrome/138.0.0.0 Mobile\",\n    \"Accept\": \"*/*\"\n  }\n}",
+  "exploreUrl": "玄幻小说::/xuanhuan/{{page}}.html\n武侠小说::/wuxia/{{page}}.html\n都市小说::/dushi/{{page}}.html\n历史小说::/lishi/{{page}}.html\n科幻小说::/kehuan/{{page}}.html\n游戏小说::/youxi/{{page}}.html\n女生小说::/nvsheng/{{page}}.html\n其他小说::/qita/{{page}}.html",
+  "ruleSearch": {
+    "author": "",
+    "bookList": ".item",
+    "bookUrl": "dt a@href",
+    "coverUrl": "img@data-original || img@src",
+    "kind": ".orange@text",
+    "name": "dt a@text"
+  },
+  "ruleExplore": {
+    "author": "tag.dl@tag.div@html",
+    "bookList": "class.hotcontent@class.item",
+    "bookUrl": "tag.dt@tag.a@href",
+    "coverUrl": "tag.img@src",
+    "intro": "tag.dl@tag.dt@html",
+    "name": "tag.dt@tag.a@text"
+  },
+  "ruleBookInfo": {
+    "author": "#info p:contains(作者)@text##作者：",
+    "coverUrl": "#fmimg img@data-original",
+    "intro": "#intro@text",
+    "kind": ".sort@text##类别：",
+    "lastChapter": ".hidden-xs a@text",
+    "name": "#info h1@text",
+    "wordCount": ""
+  },
+  "ruleToc": {
+    "chapterList": "#newlist dd",
+    "chapterName": "a@text",
+    "chapterUrl": "a@href"
+  },
+  "ruleContent": {
+    "content": "id.booktxt@html",
+    "nextContentUrl": "text.下一章@href"
+  },
+  "customOrder": 4,
+  "lastUpdateTime": "1779666615020"
+}

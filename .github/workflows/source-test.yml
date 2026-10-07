@@ -26,7 +26,7 @@ jobs:
           P=$RUNNER_TEMP/pkg
           mkdir -p $P/Sources/SourceTest
           cp Sources/Engine/*.swift Sources/Models/*.swift $P/Sources/SourceTest/
-          cp Tools/SourceTest/main.swift $P/Sources/SourceTest/
+          cp Tools/SourceTest/*.swift $P/Sources/SourceTest/
           cat > $P/Package.swift <<'EOF'
           // swift-tools-version:5.9
           import PackageDescription
@@ -42,15 +42,26 @@ jobs:
 
       - name: Build
         run: |
+          set -o pipefail
           cd $RUNNER_TEMP/pkg
           swift build -c release 2>&1 | tee $GITHUB_WORKSPACE/test-build.log
 
+      - name: Fixed rule regression
+        run: |
+          set -o pipefail
+          $RUNNER_TEMP/pkg/.build/release/SourceTest --regression 2>&1 | tee regression.log
+
       - name: Download sources
+        if: github.event_name == 'workflow_dispatch'
         run: curl -sSL --retry 3 https://cdn.jsdelivr.net/gh/XIU2/Yuedu@master/shuyuan -o sources.json && ls -la sources.json
 
       - name: Run test
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TEST_KEY: ${{ github.event.inputs.key }}
         run: |
-          KEY="${{ github.event.inputs.key }}"
+          set -o pipefail
+          KEY="$TEST_KEY"
           [ -z "$KEY" ] && KEY=斗罗大陆
           $RUNNER_TEMP/pkg/.build/release/SourceTest sources.json "$KEY" 60 2>&1 | tee source-test.log
 
@@ -61,5 +72,6 @@ jobs:
           name: source-test-log
           path: |
             source-test.log
+            regression.log
             test-build.log
             dumps/

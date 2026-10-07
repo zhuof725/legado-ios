@@ -1,0 +1,42 @@
+{
+  "bookSourceUrl": "https://wechat.idejian.com##",
+  "bookSourceName": "⚡📂得间小说",
+  "bookSourceGroup": "常规",
+  "bookSourceType": 0,
+  "enabled": true,
+  "jsLib": "type = \"wechat\" || \"qq\";\nhost = `https://${type}.idejian.com/api/${type}`;",
+  "searchUrl": "{{host}}/search/do?keyword={{key}}&page={{page}}",
+  "exploreUrl": "@js:\nsort=[];\npush=(title,url,type1,type2)=>sort.push({\n\t\ttitle: title,\n\t\turl: url,\n\t\tstyle: {\n\t\t\t\tlayout_flexGrow: type1,\n\t\t\t\tlayout_flexBasisPercent: type2\n\t\t\t}\n\t});\n\t\nfunction fl() {\t\t\t\n\t\t\turl = `${host}/category`;\n    return  JSON.parse(java.ajax(url)).body.data; \t\t\n\t\t}\n\t\n\t\tfl().map($=>{\t\t\t\t\n \t\t\tpush($.name, null, 1, 1);\n \t\t\tlist = $.items;\n list.map(($,index)=>{\t   \t    \n \t    \ttitle = $.name;\n\turl = `${host}/category?categoryId=${$.categoryId}&resourcesId=${$.resourcesId}&page={{page}}`;\t\t\t \n\t\t\tif(index+1 <= list.length - list.length%3)\n\t\t\t {\tpush(title, url, 1, 0.25);}\n\t\t\t\telse{ push(title, url, 0, 0.29);}\n        });   \n  });\n\nJSON.stringify(sort);",
+  "ruleSearch": {
+    "author": "author",
+    "bookList": "body.books||tplData.books",
+    "bookUrl": "{{host}}{{$.url}}",
+    "coverUrl": "picUrl",
+    "intro": "desc",
+    "kind": "tag&&bookRating&&datetime",
+    "name": "bookName"
+  },
+  "ruleExplore": {},
+  "ruleBookInfo": {
+    "author": "author",
+    "coverUrl": "picUrl",
+    "init": "body.bookInfo",
+    "intro": "&nbsp;&nbsp;\n🏷 标签：{{$.multiCategory[*].name&&$.tag##\\n##,}}\n🏅 评分：{{$.bookRating}}\n🔥 人气：{{$.popularity[*]##\\n}}\n👍 点赞：{{$.like[*]##\\n}}\n&shy;\n📂 简介：{{$.desc}}\n##(^|[。！？]+[”」）】]?)##$1<br>\n@js:result.replace(/.+：\\s/g,'')",
+    "kind": "completeState&&category",
+    "lastChapter": "bookId@js:\nlist=JSON.parse(java.ajax(\"{{host}}/allcatalog/\"+result+\"?bookId=\"+result+\"&page=1\")).body.chapterList\nfilteredList = list.filter((_, index) => {\n    return index >= list.length - 1\n})\nfilteredList[0].name",
+    "name": "bookName@put:{id:bookId}",
+    "tocUrl": "{{host}}/allcatalog/{{$.bookId}}?bookId={{$.bookId}}&page=1",
+    "wordCount": "wordCount##\\n"
+  },
+  "ruleToc": {
+    "chapterList": "body.chapterList",
+    "chapterName": "name",
+    "chapterUrl": "{{host}}{{$.url}}##.html"
+  },
+  "ruleContent": {
+    "content": "body.content",
+    "replaceRegex": "##{{book.name}}[\\s\\S]*?本书由[\\s\\S]*?侵权必究"
+  },
+  "customOrder": 34,
+  "lastUpdateTime": "1790057528250"
+}

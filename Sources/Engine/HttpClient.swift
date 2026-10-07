@@ -41,6 +41,10 @@ struct AnalyzeUrl {
         url = AnalyzeUrl.absolute(s, base: baseUrl)
         if let h = sourceHeader, let o = AnalyzeUrl.looseJSON(h) {
             for (k, v) in o { headers[k] = "\(v)" }
+        } else if let h = sourceHeader?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  h.hasPrefix("Mozilla/"), !h.contains("\n"), !h.contains("\r") {
+            // 部分导入书源把 UA 直接放在 header，而不是 JSON 对象。
+            headers["User-Agent"] = h
         }
         if let o = options {
             if let m = o["method"] as? String { method = m.uppercased() }
@@ -195,6 +199,7 @@ struct AnalyzeUrl {
                 req.setValue(isJson ? "application/json" : "application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             }
         }
+        DebugLog.add("准备请求：\(method) \(DebugLog.url(finalUrl))；请求体 \(req.httpBody?.count ?? 0) 字节（内容隐藏）")
         let (data, resp) = try await URLSession.shared.data(for: req)
         var enc = AnalyzeUrl.encoding(charset)
         if charset == nil, let n = (resp as? HTTPURLResponse)?.textEncodingName { enc = AnalyzeUrl.encoding(n) }
@@ -203,13 +208,29 @@ struct AnalyzeUrl {
         if charset == nil, enc == .utf8, let t = text, t.range(of: "charset=[\"']?gb", options: [.regularExpression, .caseInsensitive]) != nil {
             text = String(data: data, encoding: AnalyzeUrl.encoding("gbk")) ?? t
         }
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        DebugLog.add("\(method) \(DebugLog.url(finalUrl))")
+        DebugLog.add("HTTP \(status)，\(data.count) 字节；\(DebugLog.summary(text ?? ""))")
         #if canImport(UIKit) && canImport(WebKit)
-        // 遇到 Cloudflare 等人机验证页，自动改用 WebView 加载（必要时弹出网页让用户验证）
-        if WebViewSupport.isChallenge(text ?? "") {
+        let blocked = [403, 429, 503].contains(status) && (text ?? "").count < 200
+        if blocked || WebViewSupport.isChallenge(text ?? "") {
+            DebugLog.add("被拦截/需要验证：改用 WebView；验证后会重新请求原接口")
             if let r = try? await WebViewLoader.load(url: finalUrl, method: method, body: body.map { percentEncodedBody($0) },
-                                                     headers: headers, js: webJs), !r.0.isEmpty {
-                return r
+                                                     headers: headers, js: webJs) {
+                // JSON API 在 WebView 中会渲染为 <pre>，不能把外层HTML交给 JSONPath。
+                // 同步验证 Cookie 后重新发原始请求，保留 POST 请求体。
+                await WebViewLoader.syncCookiesFromWebView()
+                if let retry = try? await URLSession.shared.data(for: req) {
+                    let retryStatus = (retry.1 as? HTTPURLResponse)?.statusCode ?? 0
+                    let retryText = String(data: retry.0, encoding: enc) ?? String(data: retry.0, encoding: .utf8) ?? ""
+                    DebugLog.add("验证后重试：HTTP \(retryStatus)，\(retry.0.count) 字节；\(DebugLog.summary(retryText))")
+                    if (200...299).contains(retryStatus), !retryText.isEmpty, !WebViewSupport.isChallenge(retryText) {
+                        return (retryText, retry.1.url?.absoluteString ?? finalUrl)
+                    }
+                }
+                if !r.0.isEmpty, !WebViewSupport.isChallenge(r.0) { return r }
             }
+            DebugLog.add("浏览器重试未获得可用数据；保留原始失败响应")
         }
         #endif
         return (text ?? "", resp.url?.absoluteString ?? url)

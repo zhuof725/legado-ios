@@ -109,6 +109,7 @@ struct SourcesView: View {
     @State private var input = ""
     @State private var message: String?
     @State private var busy = false
+    @State private var debugSource: BookSource?
 
     var body: some View {
         List {
@@ -123,12 +124,16 @@ struct SourcesView: View {
                         Text(s.bookSourceGroup ?? s.bookSourceUrl).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
+                    Button("调试") { debugSource = s }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
                     Toggle("", isOn: Binding(get: { s.isEnabled }, set: { _ in store.toggleSource(s) })).labelsHidden()
                 }
             }
             .onDelete { store.deleteSources(at: $0) }
         }
         .navigationTitle("书源")
+        .sheet(item: $debugSource) { source in SourceDebugView(source: source) }
         .overlay { if busy { ProgressView() } }
         .toolbar {
             Menu {

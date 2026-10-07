@@ -18,7 +18,7 @@ jobs:
           P=$RUNNER_TEMP/pkg
           mkdir -p $P/Sources/SourceTest
           cp Sources/Engine/*.swift Sources/Models/*.swift $P/Sources/SourceTest/
-          cp Tools/SourceTest/main.swift $P/Sources/SourceTest/
+          cp Tools/SourceTest/*.swift $P/Sources/SourceTest/
           cat > $P/Package.swift <<'EOF'
           // swift-tools-version:5.9
           import PackageDescription
@@ -38,9 +38,16 @@ jobs:
           set -o pipefail
           cd $RUNNER_TEMP/pkg
           swift build -c release 2>&1 | tee "$GITHUB_WORKSPACE/test-build.log"
-      - name: Test uploaded sources
+      - name: Fixed rule regression
         run: |
-          KEY="${{ github.event.inputs.key }}"
+          set -o pipefail
+          $RUNNER_TEMP/pkg/.build/release/SourceTest --regression 2>&1 | tee regression.log
+      - name: Test uploaded sources
+        env:
+          TEST_KEY: ${{ github.event.inputs.key }}
+        run: |
+          set -o pipefail
+          KEY="$TEST_KEY"
           $RUNNER_TEMP/pkg/.build/release/SourceTest user-sources.json "$KEY" 90 2>&1 | tee user-source-test.log
       - name: Upload diagnostics
         if: always()
@@ -49,5 +56,6 @@ jobs:
           name: uploaded-source-test
           path: |
             user-source-test.log
+            regression.log
             test-build.log
             dumps/
