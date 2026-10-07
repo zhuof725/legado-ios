@@ -184,12 +184,19 @@ enum WebBook {
                 cu = AnalyzeUrl.absolute(cu, base: url)
             }
             var chapter = BookChapter(url: cu, title: title, index: 0, isVolume: isVol)
+            if let vr = rule.isVip, !vr.isEmpty { chapter.isVip = isTruthy(ar.getString(vr, from: item)) }
             if let ur = rule.updateTime, !ur.isEmpty {
                 chapter.updateTime = nilIfEmpty(ar.getString(ur, from: item))
             }
             out.append(chapter)
         }
         return out
+    }
+
+    /// 与 Legado 对 isVip/isPay/isVolume 的判定一致：空、false、0、null 为假，其余为真。
+    static func isTruthy(_ raw: String) -> Bool {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return !(t.isEmpty || t == "false" || t == "0" || t == "null" || t == "undefined")
     }
 
     /// Legado 以章节 url 为键，用 LinkedHashSet 保留首次出现；空 URL 的卷标题不参与去重。

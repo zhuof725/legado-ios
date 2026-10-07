@@ -25,6 +25,22 @@ enum TocParseRegression {
         check(parsed.first(where: { $0.url == "https://toc.invalid/c/1" })?.updateTime == "2024-01-01", "目录：ruleToc.updateTime 被解析")
         check(parsed.first(where: { $0.url == "https://toc.invalid/c/3" })?.updateTime == nil, "目录：缺少 updateTime 时为空")
 
+        let vipRule = TocRule(chapterList: "li", chapterName: "a@text", chapterUrl: "a@href", isVip: "i@text")
+        let vipHTML = "<ul><li><a href='/v/1'>免费</a><i></i></li><li><a href='/v/2'>付费</a><i>true</i></li><li><a href='/v/3'>零</a><i>0</i></li><li><a href='/v/4'>假</a><i>false</i></li><li><a href='/v/5'>是</a><i>1</i></li></ul>"
+        let vipAr = AnalyzeRule(content: vipHTML, baseUrl: base)
+        let vip = WebBook.parseChapterNodes(vipAr.getElements("li"), rule: vipRule, ar: vipAr, baseUrl: base)
+        check(vip.map(\.isVip) == [false, true, false, false, true], "目录：isVip 按 空/false/0 为假、其余为真")
+        let novip = WebBook.parseChapterNodes(nodes, rule: rule, ar: ar, baseUrl: base)
+        check(novip.allSatisfy { !$0.isVip }, "目录：未配置 isVip 时全部为非付费")
+        check(WebBook.isTruthy("true") && WebBook.isTruthy("1") && !WebBook.isTruthy(" ") && !WebBook.isTruthy("null"), "isTruthy 判定")
+
+        // 旧版本落盘的目录缓存（没有 updateTime/isVip）必须仍可读取。
+        let oldJSON = "[{\"url\":\"https://old.invalid/1\",\"title\":\"旧章\",\"index\":0,\"isVolume\":false},{\"url\":\"\",\"title\":\"旧卷\",\"index\":1}]"
+        let old = try? JSONDecoder().decode([BookChapter].self, from: Data(oldJSON.utf8))
+        check(old?.count == 2 && old?[0].isVip == false && old?[0].updateTime == nil && old?[1].isVolume == false, "目录缓存：旧版 JSON（缺 isVip/updateTime）仍可解码")
+        let round = try? JSONDecoder().decode(BookChapter.self, from: JSONEncoder().encode(BookChapter(url: "u", title: "t", index: 3, isVolume: true, updateTime: "x", isVip: true)))
+        check(round?.isVip == true && round?.updateTime == "x" && round?.isVolume == true && round?.index == 3, "目录缓存：新字段编码解码往返")
+
         func ch(_ u: String, _ t: String, vol: Bool = false) -> BookChapter {
             BookChapter(url: u, title: t, index: 0, isVolume: vol)
         }

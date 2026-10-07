@@ -200,7 +200,10 @@ struct ReaderView: View {
                                 Button {
                                     showToc = false; go(c.index)
                                 } label: {
-                                    Text(c.title).foregroundStyle(c.index == index ? Color.accentColor : Color.primary)
+                                    HStack {
+                                        Text(c.title).foregroundStyle(c.index == index ? Color.accentColor : Color.primary)
+                                        if c.isVip { Image(systemName: "lock.fill").font(.caption).foregroundStyle(.orange) }
+                                    }
                                 }
                             }
                         }

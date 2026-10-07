@@ -149,4 +149,24 @@ struct BookChapter: Codable, Hashable, Identifiable {
     var isVolume: Bool = false
     /// ruleToc.updateTime 解析结果（可选，旧数据缺省）。
     var updateTime: String? = nil
+    /// ruleToc.isVip：付费/会员章节标记，不影响阅读。
+    var isVip: Bool = false
+
+    init(url: String, title: String, index: Int, isVolume: Bool = false, updateTime: String? = nil, isVip: Bool = false) {
+        self.url = url; self.title = title; self.index = index
+        self.isVolume = isVolume; self.updateTime = updateTime; self.isVip = isVip
+    }
+
+    enum CodingKeys: String, CodingKey { case url, title, index, isVolume, updateTime, isVip }
+
+    /// 宽松解码：旧版本落盘的目录缓存没有 updateTime/isVip，缺字段时用默认值，不丢缓存。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        url = try c.decode(String.self, forKey: .url)
+        title = try c.decode(String.self, forKey: .title)
+        index = try c.decode(Int.self, forKey: .index)
+        isVolume = (try? c.decodeIfPresent(Bool.self, forKey: .isVolume)) ?? false
+        updateTime = try? c.decodeIfPresent(String.self, forKey: .updateTime)
+        isVip = (try? c.decodeIfPresent(Bool.self, forKey: .isVip)) ?? false
+    }
 }
