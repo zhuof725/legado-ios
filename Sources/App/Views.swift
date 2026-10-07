@@ -139,6 +139,8 @@ struct ReaderView: View {
     @State private var chapters: [BookChapter] = []
     @State private var index = 0
     @State private var text = ""
+    @State private var blocks: [ContentBlock] = []
+    @State private var commentURL: URL?
     @State private var loading = true
     @State private var error: String?
     @State private var showToc = false
@@ -161,10 +163,16 @@ struct ReaderView: View {
                         }
                         if loading { ProgressView().frame(maxWidth: .infinity) }
                         if let e = error { Text(e).foregroundStyle(.red) }
-                        Text(text)
-                            .font(.system(size: settings.fontSize))
-                            .lineSpacing(settings.lineSpacing)
-                            .textSelection(.enabled)
+                        if blocks.isEmpty {
+                            Text(text)
+                                .font(.system(size: settings.fontSize))
+                                .lineSpacing(settings.lineSpacing)
+                                .textSelection(.enabled)
+                        } else {
+                            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                                blockView(block)
+                            }
+                        }
                         if !chapters.isEmpty {
                             HStack {
                                 Button("上一章") { go(index - 1) }.disabled(index <= 0)
@@ -241,6 +249,7 @@ struct ReaderView: View {
             }
             .presentationDetents([.medium])
         }
+        .sheet(item: $commentURL) { link in CommentSheet(url: link) }
         .task { await start() }
     }
 
@@ -266,6 +275,24 @@ struct ReaderView: View {
         await loadContent()
     }
 
+    @ViewBuilder
+    private func blockView(_ block: ContentBlock) -> some View {
+        switch block {
+        case .paragraph(let t, let count, let url):
+            // 段尾气泡：用行内图标+数字，点击打开评论页；没有评论的段落就是普通文字。
+            (Text("\u{3000}\u{3000}" + t)
+                + (count > 0 ? Text("  ") + Text(Image(systemName: "bubble.right.fill")) + Text(" \(count)") : Text("")))
+                .font(.system(size: settings.fontSize))
+                .lineSpacing(settings.lineSpacing)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { if count > 0, let u = url, let link = URL(string: u) { commentURL = link } }
+        case .image(let src, let click):
+            ContentImageView(src: src)
+                .onTapGesture { if let u = click, let link = URL(string: u) { commentURL = link } }
+        }
+    }
+
     private func readableIndex(from value: Int, direction: Int) -> Int? {
         guard !chapters.isEmpty else { return nil }
         var i = min(max(value, 0), chapters.count - 1)
@@ -287,19 +314,28 @@ struct ReaderView: View {
         let c = chapters[index]
         store.updateProgress(book, index: index, title: c.title)
         error = nil
-        if let cached = store.cachedContent(c) { text = cached; loading = false; prefetch(s); return }
+        if let cached = store.cachedContent(c) { show(raw: cached); loading = false; prefetch(s); return }
         loading = true
         text = ""
+        blocks = []
         do {
             let next = index + 1 < chapters.count ? chapters[index + 1].url : nil
-            let t = try await WebBook.content(source: s, chapter: c, nextChapterUrl: next, book: book)
-            text = t.isEmpty ? "（正文为空，书源可能不兼容）" : t
-            store.saveContent(c, t)
+            let r = try await WebBook.contentBlocks(source: s, chapter: c, nextChapterUrl: next, book: book)
+            if r.raw.isEmpty { text = "（正文为空，书源可能不兼容）" } else { show(raw: r.raw) }
+            store.saveContent(c, r.raw)
         } catch {
             self.error = "正文加载失败：\(error.localizedDescription)"
         }
         loading = false
         prefetch(s)
+    }
+
+    /// 缓存里存的是规则输出的原始文本（可能带 <comment>/<img>）；旧缓存是纯文本，同样能解析。
+    private func show(raw: String) {
+        let parsed = ContentBlocks.parse(raw)
+        let hasRich = parsed.contains { if case .image = $0 { return true }; if case .paragraph(_, let c, _) = $0 { return c > 0 }; return false }
+        if hasRich { blocks = parsed; text = "" }
+        else { blocks = []; text = WebBook.cleanText(raw) }
     }
 
     private func prefetch(_ s: BookSource) {
@@ -309,7 +345,7 @@ struct ReaderView: View {
         if store.cachedContent(c) != nil { return }
         let next = i + 1 < chapters.count ? chapters[i + 1].url : nil
         Task {
-            if let t = try? await WebBook.content(source: s, chapter: c, nextChapterUrl: next, book: book) { store.saveContent(c, t) }
+            if let r = try? await WebBook.contentBlocks(source: s, chapter: c, nextChapterUrl: next, book: book) { store.saveContent(c, r.raw) }
         }
     }
 }

@@ -207,6 +207,17 @@ enum WebBook {
 
     // MARK: Content
     static func content(source: BookSource, chapter: BookChapter, nextChapterUrl: String? = nil, book: Book? = nil) async throws -> String {
+        let raw = try await rawContent(source: source, chapter: chapter, nextChapterUrl: nextChapterUrl, book: book)
+        return cleanText(raw)
+    }
+
+    /// 与 content 相同的抓取流程，但保留 <comment>/<img> 标记，供阅读器渲染段评。
+    static func contentBlocks(source: BookSource, chapter: BookChapter, nextChapterUrl: String? = nil, book: Book? = nil) async throws -> (raw: String, blocks: [ContentBlock]) {
+        let raw = try await rawContent(source: source, chapter: chapter, nextChapterUrl: nextChapterUrl, book: book)
+        return (raw, ContentBlocks.parse(raw))
+    }
+
+    static func rawContent(source: BookSource, chapter: BookChapter, nextChapterUrl: String? = nil, book: Book? = nil) async throws -> String {
         guard let rule = source.ruleContent else { return "" }
         var visited = Set<String>()
         var parts: [String] = []
@@ -245,7 +256,7 @@ enum WebBook {
         if let rr = rule.replaceRegex, !rr.isEmpty {
             text = AnalyzeRule(content: text, baseUrl: chapter.url, jsLib: source.jsLib, context: RuleContext(source: source, book: book, chapter: chapter)).getString(rr.hasPrefix("##") ? rr : "##" + rr, from: text)
         }
-        return cleanText(text)
+        return text
     }
 
     static func displayIntro(_ text: String) -> String {
