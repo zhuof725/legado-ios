@@ -133,6 +133,8 @@ enum RuleRegression {
         PersistentLoginRegression.run(check)
         try CookieJarSwitchRegression.run(check)
         try TocParseRegression.run(check)
+        try LoginFormRegression.run(check)
+        SearchRankingRegression.run(check)
         NextUrlRegression.run(check)
         CookieDomainRegression.run(check)
         SourceCryptoRegression.run(check)

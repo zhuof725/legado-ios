@@ -5,7 +5,8 @@ import SwiftUI
 struct SearchView: View {
     @EnvironmentObject var store: AppStore
     @State private var keyword = ""
-    @State private var results: [Book] = []
+    @State private var hits: [SearchHit] = []
+    @State private var failedCount = 0
     @State private var searching = false
     @State private var progress = ""
     @State private var task: Task<Void, Never>?
@@ -18,11 +19,13 @@ struct SearchView: View {
                     Text(progress).font(.footnote).foregroundStyle(.secondary)
                 }
             }
-            ForEach(results) { b in
+            ForEach(hits) { h in
                 NavigationLink {
-                    BookDetailView(book: b)
+                    BookDetailView(book: h.book)
                 } label: {
-                    BookRow(book: b, subtitle: "来源：" + b.originName)
+                    BookRow(book: h.book, subtitle: h.sourceCount > 1
+                            ? "来源：\(h.book.originName) 等 \(h.sourceCount) 个书源"
+                            : "来源：" + h.book.originName)
                 }
             }
         }
@@ -38,27 +41,33 @@ struct SearchView: View {
         let key = keyword.trimmingCharacters(in: .whitespaces)
         guard !key.isEmpty else { return }
         task?.cancel()
-        results = []
+        hits = []
+        failedCount = 0
         let sources = store.sources.filter { $0.isEnabled && !($0.searchUrl ?? "").isEmpty }
         if sources.isEmpty { progress = "没有可用书源，请先导入书源"; return }
         searching = true
         progress = "0/\(sources.count)"
         task = Task {
             var done = 0
-            await withTaskGroup(of: [Book].self) { group in
+            await withTaskGroup(of: ([Book], Bool).self) { group in
                 var iter = sources.makeIterator()
                 func addNext() {
                     if let s = iter.next() {
-                        group.addTask { (try? await WebBook.search(source: s, key: key)) ?? [] }
+                        group.addTask {
+                            do { return (try await WebBook.search(source: s, key: key), false) }
+                            catch { return ([], true) }
+                        }
                     }
                 }
                 for _ in 0..<8 { addNext() }
-                for await list in group {
+                for await (list, failed) in group {
                     if Task.isCancelled { group.cancelAll(); break }
                     done += 1
-                    let exact = list.filter { $0.name.contains(key) || $0.author.contains(key) }
-                    results.append(contentsOf: exact.isEmpty ? list.prefix(5).map { $0 } : exact)
-                    progress = "\(done)/\(sources.count)，找到 \(results.count) 条"
+                    if failed { failedCount += 1 }
+                    // 与书名/作者都不相关的结果只在没有相关结果时才保留少量，避免淹没真正的匹配。
+                    let related = list.filter { SearchRanking.rank(name: $0.name, author: $0.author, key: key) < 4 }
+                    hits = SearchRanking.merge(existing: hits, new: related.isEmpty ? Array(list.prefix(3)) : related, key: key)
+                    progress = "\(done)/\(sources.count)，找到 \(hits.count) 本" + (failedCount > 0 ? "，\(failedCount) 个书源失败" : "")
                     addNext()
                 }
             }

@@ -197,8 +197,8 @@ private final class HTTPBridgeWaiter: @unchecked Sendable {
         return String(data: Data(bytes), encoding: .utf8) ?? ""
     }
     func hexEncodeToString(_ s: String) -> String { s.utf8.map { String(format: "%02x", $0) }.joined() }
-    func toast(_ s: String) -> String { print("[toast] \(s)"); return s }
-    func longToast(_ s: String) -> String { print("[toast] \(s)"); return s }
+    func toast(_ s: String) -> String { ToastCenter.post(s); return s }
+    func longToast(_ s: String) -> String { ToastCenter.post(s); return s }
     func encodeURIComponent(_ s: String) -> String {
         s.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_.!~*'()"))) ?? s
     }
@@ -206,6 +206,20 @@ private final class HTTPBridgeWaiter: @unchecked Sendable {
         let f = DateFormatter(); f.dateFormat = format.isEmpty ? "yyyy/MM/dd HH:mm" : format
         f.timeZone = TimeZone(secondsFromGMT: offset * 3600)
         return f.string(from: Date(timeIntervalSince1970: t > 1e12 ? t / 1000 : t))
+    }
+}
+
+/// JS 里 java.toast / longToast 的消息出口：界面订阅 handler 即可显示；没有订阅者时只丢弃。
+enum ToastCenter {
+    private static var browserHandler: ((String, String) -> Void)?
+    static func setBrowserHandler(_ h: ((String, String) -> Void)?) { lock.lock(); browserHandler = h; lock.unlock() }
+    static func openBrowser(_ url: String, _ title: String) { lock.lock(); let h = browserHandler; lock.unlock(); h?(url, title) }
+    private static let lock = NSLock()
+    private static var handler: ((String) -> Void)?
+    static func setHandler(_ h: ((String) -> Void)?) { lock.lock(); handler = h; lock.unlock() }
+    static func post(_ message: String) {
+        lock.lock(); let h = handler; lock.unlock()
+        h?(message)
     }
 }
 
@@ -314,7 +328,7 @@ final class JSEngine {
     java.connect=function(u){return __response(java.connectNative(String(u)))};
     java.ajaxAll=function(arr){var o=[];for(var i=0;i<arr.length;i++){o.push(__response(java.connectNative(String(arr[i]))));}return o;};
     java.startBrowserAwait=function(u,t){return java.connect(String(u))};
-    java.startBrowser=function(u,t){return ''};
+    java.startBrowser=function(u,t){if(typeof __openBrowser==='function'){__openBrowser(String(u),String(t||''));}return ''};
     java.webView=function(h,u,js){return java.ajax(String(u))};
     var __localRuleVars=Object.create(null);
     java.put=function(k,v){
@@ -734,4 +748,23 @@ final class JSEngine {
         }
         return "\(v)"
     }
+
+    /// 在书源上下文里执行一段 JS（登录按钮、login() 等），返回字符串结果；脚本抛错时返回 .failure。
+    /// 脚本 = loginUrl 里的函数库 + 调用语句。toast 通过 ToastCenter 出口。
+    func runLoginScript(source: BookSource, library: String?, call: String) -> Result<String, LoginScriptError> {
+        let context = RuleContext(source: source)
+        let ctx = makeContext(context)
+        let openBrowser: @convention(block) (String, String) -> Void = { ToastCenter.openBrowser($0, $1) }
+        ctx.setObject(openBrowser, forKeyedSubscript: "__openBrowser" as NSString)
+        var thrown: String?
+        ctx.exceptionHandler = { _, value in thrown = value?.toString() ?? "脚本错误" }
+        if let lib = source.jsLib, !lib.isEmpty, !lib.hasPrefix("{") { ctx.evaluateScript(lib) }
+        if let l = library, !l.isEmpty { ctx.evaluateScript(l) }
+        let value = ctx.evaluateScript(call)
+        if let t = thrown { return .failure(LoginScriptError(message: t)) }
+        guard let v = value, !v.isUndefined, !v.isNull else { return .success("") }
+        return .success(v.toString() ?? "")
+    }
 }
+
+struct LoginScriptError: Error { let message: String }

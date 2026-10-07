@@ -110,6 +110,7 @@ struct SourcesView: View {
     @State private var message: String?
     @State private var busy = false
     @State private var debugSource: BookSource?
+    @State private var loginSource: BookSource?
 
     var body: some View {
         List {
@@ -124,6 +125,11 @@ struct SourcesView: View {
                         Text(s.bookSourceGroup ?? s.bookSourceUrl).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
+                    if SourceLoginForm.hasLogin(s) {
+                        Button("登录") { loginSource = s }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                    }
                     Button("调试") { debugSource = s }
                         .buttonStyle(.borderless)
                         .font(.caption)
@@ -134,6 +140,7 @@ struct SourcesView: View {
         }
         .navigationTitle("书源")
         .sheet(item: $debugSource) { source in SourceDebugView(source: source) }
+        .sheet(item: $loginSource) { source in SourceLoginView(source: source) }
         .overlay { if busy { ProgressView() } }
         .toolbar {
             Menu {
