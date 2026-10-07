@@ -32,6 +32,8 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: 阅读iOS
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
