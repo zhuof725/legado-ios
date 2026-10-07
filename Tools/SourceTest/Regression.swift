@@ -131,6 +131,7 @@ enum RuleRegression {
         SourceLoginRegression.run(check)
         LoginBridgeRegression.run(check)
         PersistentLoginRegression.run(check)
+        try CookieJarSwitchRegression.run(check)
         SourceCryptoRegression.run(check)
         CryptoBridgeRegression.run(check)
         print("REGRESSION PASS: \(checks) 项固定断言；不声称真机网络/WebView 已验证。")

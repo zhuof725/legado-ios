@@ -65,6 +65,8 @@ struct BookSource: Codable, Hashable, Identifiable {
     var searchUrl: String?
     var exploreUrl: String?
     var bookUrlPattern: String?
+    /// Legado enabledCookieJar：nil 视为开启（与原版 BookSource 默认值一致）。
+    var enabledCookieJar: Bool?
     var ruleSearch: SearchRule?
     var ruleExplore: SearchRule?
     var ruleBookInfo: BookInfoRule?
@@ -74,10 +76,11 @@ struct BookSource: Codable, Hashable, Identifiable {
     var lastUpdateTime: Int64?
 
     var isEnabled: Bool { enabled ?? true }
+    var cookieJarEnabled: Bool { enabledCookieJar ?? true }
 
     enum CodingKeys: String, CodingKey {
         case bookSourceUrl, bookSourceName, bookSourceGroup, bookSourceType, bookSourceComment
-        case enabled, header, jsLib, loginUrl, loginUi, searchUrl, exploreUrl, bookUrlPattern
+        case enabled, header, jsLib, loginUrl, loginUi, searchUrl, exploreUrl, bookUrlPattern, enabledCookieJar
         case ruleSearch, ruleExplore, ruleBookInfo, ruleToc, ruleContent, customOrder, lastUpdateTime
     }
 
@@ -96,6 +99,7 @@ struct BookSource: Codable, Hashable, Identifiable {
         searchUrl = try? c.decodeIfPresent(String.self, forKey: .searchUrl)
         exploreUrl = try? c.decodeIfPresent(String.self, forKey: .exploreUrl)
         bookUrlPattern = try? c.decodeIfPresent(String.self, forKey: .bookUrlPattern)
+        enabledCookieJar = try? c.decodeIfPresent(Bool.self, forKey: .enabledCookieJar)
         ruleSearch = BookSource.lenient(c, .ruleSearch)
         ruleExplore = BookSource.lenient(c, .ruleExplore)
         ruleBookInfo = BookSource.lenient(c, .ruleBookInfo)

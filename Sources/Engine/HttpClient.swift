@@ -41,11 +41,14 @@ struct AnalyzeUrl {
     var webJs: String?
     let context: RuleContext?
     let jsLib: String?
+    /// 书源 enabledCookieJar：关闭时本次请求不带、也不保存 Cookie。
+    var cookieJarEnabled: Bool = true
 
     init(rawUrl: String, key: String? = nil, page: Int = 1, baseUrl: String? = nil,
          sourceHeader: String? = nil, context: RuleContext? = nil, jsLib: String? = nil) {
         self.context = context
         self.jsLib = jsLib
+        self.cookieJarEnabled = context?.source?.cookieJarEnabled ?? true
         var s = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         // @js: / <js></js> 先执行，再做模板替换（与 Legado 一致）
         s = AnalyzeUrl.evalUrlJS(s, key: key, page: page, baseUrl: baseUrl, context: context, jsLib: jsLib)
@@ -207,8 +210,17 @@ struct AnalyzeUrl {
 
     /// HTTP 4xx/5xx remain responses; transport errors and cancellation throw.
     /// Session injection is local and does not register a global URLProtocol.
-    func fetchResponse(session: URLSession = .shared) async throws -> HTTPResponseData {
+    func fetchResponse(session baseSession: URLSession = .shared) async throws -> HTTPResponseData {
         try Task.checkCancellation()
+        // enabledCookieJar=false：用不存 Cookie 的临时会话，既不发送也不保存 Set-Cookie。
+        let session: URLSession
+        if cookieJarEnabled { session = baseSession } else {
+            let cfg = baseSession.configuration.copy() as! URLSessionConfiguration
+            cfg.httpCookieStorage = nil
+            cfg.httpShouldSetCookies = false
+            cfg.httpCookieAcceptPolicy = .never
+            session = URLSession(configuration: cfg)
+        }
         if url.hasPrefix("data:") {
             var payload = ""
             if let r = url.range(of: "base64,") { payload = String(url[r.upperBound...]) }
@@ -229,6 +241,8 @@ struct AnalyzeUrl {
         guard let u = URL(string: finalUrl) else { throw URLError(.badURL) }
         var req = URLRequest(url: u, timeoutInterval: 20)
         req.httpMethod = method
+        // enabledCookieJar=false：不携带也不接收 Cookie（Legado 原版同样绕过 CookieJar）。
+        if !cookieJarEnabled { req.httpShouldHandleCookies = false }
         req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
         if req.value(forHTTPHeaderField: "Referer") == nil, let host = URL(string: finalUrl)?.host {
