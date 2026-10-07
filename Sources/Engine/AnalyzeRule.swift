@@ -7,16 +7,27 @@ final class AnalyzeRule {
     let baseUrl: String
     let jsLib: String?
     let context: RuleContext
+    /// 原始响应文本。Legado 中顶层 JS 的 result 是原始字符串（如 data: URL 解出的十六进制），
+    /// 不能是 SwiftSoup 重新序列化后的 <html> 文档。
+    let rawContent: String?
 
     init(content: Any, baseUrl: String, jsLib: String? = nil, context: RuleContext = RuleContext()) {
         self.baseUrl = baseUrl
         self.jsLib = jsLib
         self.context = context
         if let s = content as? String {
+            self.rawContent = s
             self.content = AnalyzeRule.parse(s, baseUrl: baseUrl)
         } else {
+            self.rawContent = nil
             self.content = content
         }
+    }
+
+    /// 传给 JS 的 result：顶层文档用原始文本，其余节点按原逻辑转换
+    private func jsInput(_ input: Any) -> Any {
+        if let raw = rawContent, (input as AnyObject) === (content as AnyObject) { return raw }
+        return AnalyzeRule.jsValue(input)
     }
 
     static func parse(_ s: String, baseUrl: String) -> Any {
@@ -58,7 +69,7 @@ final class AnalyzeRule {
 
     private func runJS(_ js: String, _ input: Any) -> Any {
         let expanded = expandEmbeddedTemplates(js, input: input)
-        return JSEngine.shared.eval(expanded, result: AnalyzeRule.jsValue(input), baseUrl: baseUrl, jsLib: jsLib, rule: self, ruleInput: input, context: context) ?? ""
+        return JSEngine.shared.eval(expanded, result: jsInput(input), baseUrl: baseUrl, jsLib: jsLib, rule: self, ruleInput: input, context: context) ?? ""
     }
 
     /// Legado 会在执行 @js:/<js> 前先展开其中的 {{规则}}。
