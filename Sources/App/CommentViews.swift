@@ -3,19 +3,32 @@ import WebKit
 
 extension URL: Identifiable { public var id: String { absoluteString } }
 
-/// 段评/章评：用 WebView 打开书源给的评论页（半屏）。评论页本身由书源服务提供。
+/// 段评/章评：用 WebView 打开书源给的评论页（半屏，默认约 80% 屏高，可拖到全屏）。
+/// 去掉导航栏标题，只保留一个小的「关闭」，让评论页自己的顶栏贴近半屏顶部，与书源在 Android 上的半屏一致。
 struct CommentSheet: View {
     let url: URL
+    var heightFraction: CGFloat = 0.8
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            CommentWebView(url: url)
-                .navigationTitle("评论")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
+        ZStack(alignment: .topTrailing) {
+            CommentWebView(url: url).ignoresSafeArea(edges: .bottom)
+            Button { dismiss() } label: {
+                Image(systemName: "xmark.circle.fill").font(.system(size: 26)).symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.secondary).padding(10)
+            }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.fraction(heightFraction), .large])
+        .presentationDragIndicator(.visible)
+        .modifier(SheetCorner(radius: 20))
+    }
+}
+
+/// presentationCornerRadius 需要 iOS 16.4；低版本保持系统默认圆角。
+private struct SheetCorner: ViewModifier {
+    let radius: CGFloat
+    func body(content: Content) -> some View {
+        if #available(iOS 16.4, *) { content.presentationCornerRadius(radius) } else { content }
     }
 }
 
@@ -84,9 +97,14 @@ struct SVGWebView: UIViewRepresentable {
 }
 
 
-/// 段尾评论气泡：空心圆角气泡 + 内部数字，画成 UIImage，便于用 Text(Image) 接在段落文字后面。
+/// 段尾评论气泡：空心圆角气泡 + 内部数字，画成 UIImage，用 Text(Image) 接在段落文字后面。
+/// 图片的底边对齐文字基线（imageBaseline 由 Text 的 baselineOffset 抵消尾巴），高度不超过一行字高，
+/// 这样既不顶到上一行，也不压到下一行。
 enum CommentBubble {
     private static var cache: [String: UIImage] = [:]
+
+    /// 气泡主体高度约为字号的 1.05 倍；尾巴向下伸出，用负的基线偏移补回。
+    static func tailHeight(for size: CGFloat) -> CGFloat { size * 0.22 }
 
     static func image(count: Int, size: CGFloat, color: UIColor) -> UIImage {
         let label = count > 99 ? "99" : String(count)
@@ -94,24 +112,21 @@ enum CommentBubble {
         color.getRed(&r, green: &g, blue: &b, alpha: &a)
         let key = "\(label)|\(Int(size))|\(Int(r * 255)),\(Int(g * 255)),\(Int(b * 255))"
         if let hit = cache[key] { return hit }
-        let w = size * 1.7, h = size * 1.35
-        let tail: CGFloat = size * 0.28
+        let w = size * (label.count > 1 ? 1.55 : 1.25), h = size * 1.0
+        let tail = tailHeight(for: size)
         let canvas = CGSize(width: w + 2, height: h + tail + 2)
-        let renderer = UIGraphicsImageRenderer(size: canvas)
-        let img = renderer.image { _ in
-            let line = max(size * 0.09, 1)
+        let img = UIGraphicsImageRenderer(size: canvas).image { _ in
+            let line = max(size * 0.085, 1)
             let body = CGRect(x: 1 + line / 2, y: 1 + line / 2, width: w - line, height: h - line)
             let path = UIBezierPath(roundedRect: body, cornerRadius: body.height / 2)
-            // 左下角的小尾巴
-            path.move(to: CGPoint(x: body.minX + body.width * 0.22, y: body.maxY - 1))
+            path.move(to: CGPoint(x: body.minX + body.width * 0.24, y: body.maxY - 1))
             path.addLine(to: CGPoint(x: body.minX + body.width * 0.12, y: body.maxY + tail))
-            path.addLine(to: CGPoint(x: body.minX + body.width * 0.42, y: body.maxY - 1))
+            path.addLine(to: CGPoint(x: body.minX + body.width * 0.46, y: body.maxY - 1))
             color.setStroke()
             path.lineWidth = line
             path.stroke()
-            let font = UIFont.systemFont(ofSize: size * 0.62, weight: .semibold)
-            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
-            let text = NSAttributedString(string: label, attributes: attrs)
+            let font = UIFont.systemFont(ofSize: size * 0.58, weight: .semibold)
+            let text = NSAttributedString(string: label, attributes: [.font: font, .foregroundColor: color])
             let ts = text.size()
             text.draw(at: CGPoint(x: body.midX - ts.width / 2, y: body.midY - ts.height / 2))
         }.withRenderingMode(.alwaysOriginal)

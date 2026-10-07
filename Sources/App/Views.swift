@@ -280,9 +280,9 @@ struct ReaderView: View {
         switch block {
         case .paragraph(let t, let count, let url):
             // 段尾气泡：数字放在空心圆角气泡里，渲染成图片后接在文字末尾，随文字换行。
-            let size = max(settings.fontSize - 3, 12)
+            let size = max(settings.fontSize - 5, 11)
             (Text("\u{3000}\u{3000}" + t)
-                + (count > 0 ? Text("  ") + Text(Image(uiImage: CommentBubble.image(count: count, size: size, color: UIColor(theme.fg)))) : Text("")))
+                + (count > 0 ? Text(" ") + Text(Image(uiImage: CommentBubble.image(count: count, size: size, color: UIColor(theme.fg)))).baselineOffset(-CommentBubble.tailHeight(for: size) * 0.5) : Text("")))
                 .font(.system(size: settings.fontSize))
                 .lineSpacing(settings.lineSpacing)
                 .frame(maxWidth: .infinity, alignment: .leading)
