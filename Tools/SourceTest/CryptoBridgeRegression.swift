@@ -31,6 +31,19 @@ enum CryptoBridgeRegression {
             var c=java.createSymmetricCrypto('DES/CBC/PKCS5Padding','KW8Dvm2N','1ae2c94b');
             c.encryptHex('hello');
             """) == "d90ea623277fbe3f", "script DES CBC vector")
+        // 3DES（DESede）已知答案向量，由 openssl des-ede3 生成。
+        check(js("java.tripleDESEncodeBase64Str('hello world','{1dYgqE)h9,R)hKqEcv4]k[h','CBC','PKCS5Padding','01234567')")
+              == "/iXAps4V2Ixuc5BZ1/gH3A==", "script 3DES CBC encryptBase64 matches openssl vector")
+        check(js("java.tripleDESEncodeBase64Str('abc','0821CAAD409B84020821CAAD','CBC','PKCS5Padding',String.fromCharCode(0,0,0,0,0,0,0,0))")
+              == "/gNfGJkAzrw=", "script 3DES CBC with all-zero IV string")
+        check(js("java.tripleDESDecodeStr('/iXAps4V2Ixuc5BZ1/gH3A==','{1dYgqE)h9,R)hKqEcv4]k[h','CBC','PKCS5Padding','01234567')")
+              == "hello world", "script 3DES decode round trip")
+        check(js("var c=java.createSymmetricCrypto('DESede/ECB/PKCS5Padding','{1dYgqE)h9,R)hKqEcv4]k[h');c.encryptBase64('hello world')")
+              == "/fFlPDrFqXAGaj2LRQTjGw==", "script 3DES ECB vector")
+        check(js("(function(){try{java.tripleDESEncodeBase64Str('x','short','CBC','PKCS5Padding','01234567');return 'no';}catch(e){return 'throws';}})()")
+              == "throws", "3DES rejects a key that is not 24 bytes")
+        check(js("[java.getThemeMode(),typeof java.refreshContent,typeof java.refreshExplore].join('|')")
+              == "6|function|function", "theme/refresh helpers exist")
         check(js("[java.digestHex('abc','SHA-256').slice(0,8), java.digestHex('abc','MD5'), java.digestBase64Str('abc','MD5')].join('|')")
               == "ba7816bf|900150983cd24fb0d6963f7d28e17f72|kAFQmDzST7DWlj99KOF/cg==", "script digests")
         check(js("java.HMacHex('what do ya want for nothing?','SHA-256','Jefe')")

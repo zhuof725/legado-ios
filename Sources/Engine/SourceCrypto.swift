@@ -177,6 +177,11 @@ enum SourceCrypto {
                 algorithm = CCAlgorithm(kCCAlgorithmDES)
                 blockSize = kCCBlockSizeDES
                 guard key.count == 8 else { throw CryptoError.invalidKeyLength }
+            case "DESEDE", "TRIPLEDES", "3DES":
+                // Java 的 DESede：24 字节密钥（K1,K2,K3）。
+                algorithm = CCAlgorithm(kCCAlgorithm3DES)
+                blockSize = kCCBlockSize3DES
+                guard key.count == 24 else { throw CryptoError.invalidKeyLength }
             default:
                 throw CryptoError.unsupportedTransformation
             }

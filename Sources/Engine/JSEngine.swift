@@ -391,6 +391,20 @@ final class JSEngine {
             encryptHex:function(d){return String(__cipherRun(id,'encryptHex',typeof d==='string'?'s':'b',typeof d==='string'?d:JSON.stringify(__bytes(d))));}
         };
     };
+    // Legado JsExtensions：tripleDESEncodeBase64Str(data,key,mode,padding,iv) / tripleDESDecodeStr(data,key,mode,padding,iv)。
+    java.tripleDESEncodeBase64Str=function(d,k,mode,pad,iv){
+        var t='DESede/'+String(mode)+'/'+String(pad);
+        var c=java.createSymmetricCrypto(t,String(k),(iv==null||iv==='')?null:String(iv));
+        return String(c.encryptBase64(String(d)));
+    };
+    java.tripleDESDecodeStr=function(d,k,mode,pad,iv){
+        var t='DESede/'+String(mode)+'/'+String(pad);
+        var c=java.createSymmetricCrypto(t,String(k),(iv==null||iv==='')?null:String(iv));
+        return String(c.decryptStr(String(d)));
+    };
+    java.getThemeMode=function(){return 6;};
+    java.refreshContent=function(){return '';};
+    java.refreshExplore=function(){return '';};
     java.androidId=function(){return String(__deviceId());};
     java.deviceID=function(){return String(__deviceId());};
     java.utf8ToGbk=function(s){return s};

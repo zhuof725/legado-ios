@@ -134,6 +134,7 @@ enum RuleRegression {
         try CookieJarSwitchRegression.run(check)
         try TocParseRegression.run(check)
         try LoginFormRegression.run(check)
+        try QimoSourceRegression.run(check)
         SearchRankingRegression.run(check)
         NextUrlRegression.run(check)
         CookieDomainRegression.run(check)
