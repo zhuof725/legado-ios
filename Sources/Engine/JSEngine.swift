@@ -3,12 +3,57 @@ import JavaScriptCore
 import CommonCrypto
 import SwiftSoup
 
+/// A single-request result slot. Every access is locked; closing on timeout
+/// rejects late completion rather than letting a detached task mutate returned state.
+private final class HTTPBridgeWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let semaphore = DispatchSemaphore(value: 0)
+    private var result: Result<HTTPResponseData, Error>?
+    private var closed = false
+
+    private func finish(_ value: Result<HTTPResponseData, Error>) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, result == nil else { return }
+        result = value
+        semaphore.signal()
+    }
+
+    private func take(timedOut: Bool) -> Result<HTTPResponseData, Error> {
+        lock.lock()
+        defer { lock.unlock() }
+        closed = true
+        defer { result = nil }
+        if timedOut { return .failure(URLError(.timedOut)) }
+        return result ?? .failure(URLError(.unknown))
+    }
+
+    static func run(timeout: TimeInterval,
+                    operation: @escaping @Sendable () async throws -> HTTPResponseData) throws -> HTTPResponseData {
+        let slot = HTTPBridgeWaiter()
+        let task = Task.detached {
+            do {
+                try Task.checkCancellation()
+                let response = try await operation()
+                try Task.checkCancellation()
+                slot.finish(.success(response))
+            } catch {
+                slot.finish(.failure(error))
+            }
+        }
+        let timedOut = slot.semaphore.wait(timeout: .now() + max(0, timeout)) == .timedOut
+        let result = slot.take(timedOut: timedOut)
+        if timedOut { task.cancel() }
+        return try result.get()
+    }
+}
+
 /// Bridge object exposed to book-source JS as `java`.
 @objc protocol JavaBridgeExports: JSExport {
     /// Legado 约定：ajax 直接返回响应正文。
     func ajax(_ url: String) -> String
     /// 原生响应对象入口，由 JS 包装为 java.connect。
-    func connectNative(_ url: String) -> StrResponse
+    func connectNative(_ url: String) -> StrResponse?
     func base64Decode(_ s: String) -> String
     func base64Encode(_ s: String) -> String
     func md5Encode(_ s: String) -> String
@@ -18,8 +63,8 @@ import SwiftSoup
     func log(_ s: String) -> String
     func storePut(_ key: String, _ value: String) -> String
     func storeGet(_ key: String) -> String
-    func httpGetNative(_ url: String, _ headersJSON: String) -> StrResponse
-    func httpPostNative(_ url: String, _ body: String, _ headersJSON: String) -> StrResponse
+    func httpGetNative(_ url: String, _ headersJSON: String) -> StrResponse?
+    func httpPostNative(_ url: String, _ body: String, _ headersJSON: String) -> StrResponse?
     func hexDecodeToString(_ s: String) -> String
     func hexEncodeToString(_ s: String) -> String
     func toast(_ s: String) -> String
@@ -32,45 +77,37 @@ import SwiftSoup
     static var store: [String: String] = [:]
     static let lock = NSLock()
     let context: RuleContext?
+    private let session: URLSession
+    private let responseTimeout: TimeInterval
 
-    init(context: RuleContext? = nil) {
+    init(context: RuleContext? = nil, session: URLSession = .shared,
+         responseTimeout: TimeInterval = 25) {
         self.context = context
+        self.session = session
+        self.responseTimeout = responseTimeout
         super.init()
     }
 
     func ajax(_ url: String) -> String {
-        let response = connectNative(url)
-        #if canImport(UIKit) && canImport(WebKit)
-        if WebViewSupport.isChallenge(response.body) {
-            let sem = DispatchSemaphore(value: 0)
-            var body = response.body
-            Task { @MainActor in
-                if let r = try? await WebViewLoader.load(url: response.url, headers: [:], allowInteractive: true) {
-                    body = r.0
-                }
-                sem.signal()
-            }
-            _ = sem.wait(timeout: .now() + 35)
-            return body
-        }
-        #endif
-        return response.body
+        // AnalyzeUrl owns the existing verification path. Do not load the same
+        // challenge again here; failures set the current JavaScript exception.
+        return connectNative(url)?.body ?? ""
     }
 
-    func connectNative(_ url: String) -> StrResponse {
-        let sem = DispatchSemaphore(value: 0)
-        var result: (String, String) = ("", "")
-        var au = AnalyzeUrl(rawUrl: url, baseUrl: context?.source?.bookSourceUrl, sourceHeader: context?.source?.header, context: context, jsLib: context?.source?.jsLib)
-        Task.detached {
-            result = (try? await au.fetch()) ?? ("", "")
-            sem.signal()
-        }
-        _ = sem.wait(timeout: .now() + 25)
-        return StrResponse(url: result.1.isEmpty ? url : result.1, body: result.0)
+    func connectNative(_ url: String) -> StrResponse? {
+        let au = AnalyzeUrl(rawUrl: url, baseUrl: context?.source?.bookSourceUrl,
+                            sourceHeader: context?.source?.header, context: context,
+                            jsLib: context?.source?.jsLib)
+        return fetchResponse(au, fallbackURL: url)
     }
 
     func ajaxAllNative(_ urls: [String]) -> [StrResponse] {
-        urls.map { connectNative($0) }
+        var responses: [StrResponse] = []
+        for url in urls {
+            guard let response = connectNative(url) else { return [] }
+            responses.append(response)
+        }
+        return responses
     }
     func base64Decode(_ s: String) -> String {
         var t = s.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -106,13 +143,13 @@ import SwiftSoup
         return JavaBridge.store[key] ?? ""
     }
 
-    func httpGetNative(_ url: String, _ headersJSON: String) -> StrResponse {
+    func httpGetNative(_ url: String, _ headersJSON: String) -> StrResponse? {
         let au = AnalyzeUrl(rawUrl: url, baseUrl: context?.source?.bookSourceUrl,
                             sourceHeader: headersJSON, context: context, jsLib: context?.source?.jsLib)
         return fetchResponse(au, fallbackURL: url)
     }
 
-    func httpPostNative(_ url: String, _ body: String, _ headersJSON: String) -> StrResponse {
+    func httpPostNative(_ url: String, _ body: String, _ headersJSON: String) -> StrResponse? {
         var au = AnalyzeUrl(rawUrl: url, baseUrl: context?.source?.bookSourceUrl,
                             sourceHeader: headersJSON, context: context)
         au.method = "POST"
@@ -120,15 +157,34 @@ import SwiftSoup
         return fetchResponse(au, fallbackURL: url)
     }
 
-    private func fetchResponse(_ au: AnalyzeUrl, fallbackURL: String) -> StrResponse {
-        let sem = DispatchSemaphore(value: 0)
-        var result: (String, String) = ("", "")
-        Task.detached {
-            result = (try? await au.fetch()) ?? ("", "")
-            sem.signal()
+    private func fetchResponse(_ au: AnalyzeUrl, fallbackURL: String) -> StrResponse? {
+        let request = au
+        let requestSession = session
+        do {
+            let response = try HTTPBridgeWaiter.run(timeout: responseTimeout) {
+                try await request.fetchResponse(session: requestSession)
+            }
+            return StrResponse(response)
+        } catch {
+            // This executes on the calling JS thread, never the detached task.
+            // HTTP 4xx/5xx do not enter this branch: they retain body and metadata.
+            let nativeError = error as NSError
+            let timedOut = nativeError.domain == NSURLErrorDomain
+                && nativeError.code == URLError.timedOut.rawValue
+            if let jsContext = JSContext.current() {
+                let exception = JSValue(newErrorFromMessage: timedOut
+                    ? "HTTP request timed out"
+                    : "HTTP transport failed: \(nativeError.localizedDescription)", in: jsContext)
+                exception?.setObject(timedOut ? "TimeoutError" : "NetworkError",
+                                     forKeyedSubscript: "name" as NSString)
+                exception?.setObject(nativeError.domain, forKeyedSubscript: "domain" as NSString)
+                exception?.setObject(nativeError.code, forKeyedSubscript: "nativeCode" as NSString)
+                exception?.setObject(fallbackURL, forKeyedSubscript: "url" as NSString)
+                jsContext.exception = exception
+            }
+            // Direct native callers receive nil, never a fabricated HTTP 200.
+            return nil
         }
-        _ = sem.wait(timeout: .now() + 25)
-        return StrResponse(url: result.1.isEmpty ? fallbackURL : result.1, body: result.0)
     }
 
     func hexDecodeToString(_ s: String) -> String {
@@ -155,6 +211,15 @@ import SwiftSoup
 
 final class JSEngine {
     static let shared = JSEngine()
+    private let session: URLSession
+    private let responseTimeout: TimeInterval
+
+    /// Instance-local injection keeps offline tests away from the shared session.
+    init(session: URLSession = .shared, responseTimeout: TimeInterval = 25) {
+        self.session = session
+        self.responseTimeout = responseTimeout
+    }
+
     /// 当前正在执行的书源（供 JS 里的 `source` 对象使用）
     static var currentSource: BookSource?
 
@@ -167,14 +232,37 @@ final class JSEngine {
     var chapter={title:'',url:'',index:0};
     var Packages={org:{jsoup:{Jsoup:{parse:function(html){return __jsoupParse(String(html));}}}}};
     var org=Packages.org;
-    function __response(r){
-        if(!r){return null;}
+    // Preserve primitive code and url: neither can also be a same-named
+    // method without breaking strict comparisons. code()/url() remain unsupported.
+    // connect headers model the read-only Kotlin Headers subset; get/post headers
+    // are a plain map, not an OkHttp Headers object or a complete Java Map.
+    function __response(r,jsoup){
+        if(!r){throw new Error('HTTP response unavailable');}
         return {
             url:r.url,
             code:r.code,
             length:r.length,
+            statusKnown:r.code !== 0,
             body:function(){return r.body},
-            header:function(k){return r.header(k)},
+            statusCode:function(){return r.code},
+            isSuccessful:function(){return r.isSuccessful()},
+            header:function(k){return r.header(String(k))},
+            headers:function(){
+                var fields=r.headers(), copy=Object.create(null);
+                Object.keys(fields).forEach(function(k){copy[k]=fields[k]});
+                if(jsoup){return copy;}
+                return {
+                    get:function(k){
+                        k=String(k).toLowerCase();
+                        var names=Object.keys(copy);
+                        for(var i=0;i<names.length;i++){
+                            if(names[i].toLowerCase()===k){return copy[names[i]];}
+                        }
+                        return null;
+                    },
+                    names:function(){return Object.keys(copy)}
+                };
+            },
             toString:function(){return r.body},
             valueOf:function(){return r.body}
         };
@@ -196,9 +284,9 @@ final class JSEngine {
             if(typeof __contextGet==='function'){return String(__contextGet(k));}
             return Object.prototype.hasOwnProperty.call(__localRuleVars,k)?__localRuleVars[k]:'';
         }
-        return __response(java.httpGetNative(String(k),JSON.stringify(h||{})));
+        return __response(java.httpGetNative(String(k),JSON.stringify(h||{})),true);
     };
-    java.post=function(u,b,h){return __response(java.httpPostNative(String(u),String(b),JSON.stringify(h||{})))};
+    java.post=function(u,b,h){return __response(java.httpPostNative(String(u),String(b),JSON.stringify(h||{})),true)};
     java.getCookie=function(u,k){return ''};
     java.getString=function(r,c){
         if(arguments.length>1){return String(__ruleGetStringFrom(String(r),c));}
@@ -221,7 +309,9 @@ final class JSEngine {
             print("[JS error] \(message)")
             DebugLog.add("JS 错误：\(String(message.prefix(240)))")
         }
-        ctx.setObject(JavaBridge(context: context), forKeyedSubscript: "java" as NSString)
+        ctx.setObject(JavaBridge(context: context, session: session,
+                                 responseTimeout: responseTimeout),
+                      forKeyedSubscript: "java" as NSString)
         ctx.evaluateScript(JSEngine.prelude)
         let source = context?.source ?? JSEngine.currentSource
         if let s = source, let src = ctx.objectForKeyedSubscript("source") {

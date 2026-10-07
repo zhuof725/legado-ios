@@ -27,7 +27,7 @@ enum SourceDiagnostics {
                 if let node = nodes.first {
                     DebugLog.add("第一个节点解析出的书名：\(ar.getString(rule.name, from: node))")
                 }
-                let books = WebBook.parseBookList(source: source, body: body, baseUrl: finalURL, rule: rule)
+                let books = WebBook.parseBookList(source: source, body: body, baseUrl: finalURL, rule: rule, context: context)
                 DebugLog.add("解析成书籍：\(books.count) 本")
                 guard let first = books.first(where: { $0.name.contains(keyword) }) ?? books.first else {
                     DebugLog.add("搜索无结果：请发送这段日志的截图；当前没有测试详情/目录/正文。")

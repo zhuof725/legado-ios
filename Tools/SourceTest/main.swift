@@ -6,7 +6,7 @@ import Foundation
 setvbuf(stdout, nil, _IOLBF, 0)
 let args = CommandLine.arguments
 if args.contains("--regression") {
-    do { try RuleRegression.run(); exit(0) }
+    do { try await RuleRegression.run(); exit(0) }
     catch { print("REGRESSION ERROR: \(error)"); exit(1) }
 }
 let path = args.count > 1 ? args[1] : "sources.json"
@@ -43,14 +43,15 @@ for s in sources {
     print("  searchUrl: \(short(s.searchUrl, 120))")
     do {
         let result: String = try await withTimeout(perSourceTimeout) {
-            let au = AnalyzeUrl(rawUrl: s.searchUrl ?? "", key: key, page: 1, baseUrl: s.bookSourceUrl, sourceHeader: s.header, context: RuleContext(source: s), jsLib: s.jsLib)
+            let context = RuleContext(source: s)
+            let au = AnalyzeUrl(rawUrl: s.searchUrl ?? "", key: key, page: 1, baseUrl: s.bookSourceUrl, sourceHeader: s.header, context: context, jsLib: s.jsLib)
             print("  请求: \(au.method) \(short(au.url, 150))  charset=\(au.charset ?? "-") body=\(short(au.body, 80))")
             let (body, finalUrl) = try await au.fetch()
             print("  响应: \(body.count) 字符, url=\(short(finalUrl, 100)), 开头: \(short(body, 120))")
             try? FileManager.default.createDirectory(atPath: "dumps", withIntermediateDirectories: true)
             let safeName = s.bookSourceName.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: " ", with: "_")
             try? body.write(toFile: "dumps/\(safeName)-search.html", atomically: true, encoding: .utf8)
-            let books = WebBook.parseBookList(source: s, body: body, baseUrl: finalUrl, rule: s.ruleSearch ?? SearchRule())
+            let books = WebBook.parseBookList(source: s, body: body, baseUrl: finalUrl, rule: s.ruleSearch ?? SearchRule(), context: context)
             print("  搜索结果: \(books.count) 条")
             guard let first = books.first(where: { $0.name.contains(key) }) ?? books.first else { return "搜索0条" }
             print("  第一本: \(first.name) / \(first.author) / \(short(first.bookUrl, 120))")

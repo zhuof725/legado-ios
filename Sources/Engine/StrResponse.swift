@@ -1,10 +1,10 @@
 import Foundation
 import JavaScriptCore
 
-/// Legado `StrResponse` 的 iOS 对应类型。
-/// 原版在 JS 中通过 body()、url、code、header() 使用它；
-/// JavaScriptCore 的方法名不能同时与 Swift 属性重名，因此 body()/url()
-/// 由 JSEngine 的 JS 包装层提供，原生对象保留属性。
+/// Native response storage, retaining the existing body/url/code properties.
+/// Kotlin StrResponse and Jsoup Connection.Response are distinct contracts.
+/// JavaScript wrappers live in JSEngine; a primitive code/url property cannot
+/// simultaneously be a same-named callable method without breaking strict equality.
 @objc protocol StrResponseExports: JSExport {
     var url: String { get }
     var body: String { get }
@@ -12,6 +12,8 @@ import JavaScriptCore
     var length: Int { get }
     func toString() -> String
     func valueOf() -> String
+    func isSuccessful() -> Bool
+    func headers() -> [String: String]
     func header(_ name: String) -> String
     func cookie(_ name: String) -> String
 }
@@ -21,22 +23,30 @@ import JavaScriptCore
     let body: String
     let code: Int
     let length: Int
-    private let headers: [String: String]
+    private let responseHeaders: [String: String]
 
-    init(url: String, body: String, code: Int = 200, headers: [String: String] = [:]) {
+    /// Zero explicitly means unknown/non-HTTP status, never HTTP success.
+    init(url: String, body: String, code: Int = 0, headers: [String: String] = [:]) {
         self.url = url
         self.body = body
         self.code = code
         self.length = body.count
-        self.headers = headers
+        self.responseHeaders = headers
         super.init()
+    }
+
+    convenience init(_ response: HTTPResponseData) {
+        self.init(url: response.url, body: response.body,
+                  code: response.code, headers: response.headers)
     }
 
     @objc func toString() -> String { body }
     @objc func valueOf() -> String { body }
+    @objc func isSuccessful() -> Bool { (200...299).contains(code) }
+    @objc func headers() -> [String: String] { responseHeaders }
 
     @objc func header(_ name: String) -> String {
-        headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value ?? ""
+        responseHeaders.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value ?? ""
     }
 
     @objc func cookie(_ name: String) -> String {

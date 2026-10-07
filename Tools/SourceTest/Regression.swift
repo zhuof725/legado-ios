@@ -2,7 +2,7 @@ import Foundation
 
 /// 固定样例验证解析器，不借助网络成功率，也不会访问登录或验证码。
 enum RuleRegression {
-    static func run() throws {
+    static func run() async throws {
         var checks = 0
         func check(_ condition: Bool, _ name: String) {
             guard condition else { print("FAIL: \(name)"); exit(1) }
@@ -124,6 +124,7 @@ enum RuleRegression {
         ParserRegression.run(check)
         JSBridgeRegression.run(check)
         BookContextRegression.run(check)
+        try await HTTPResponseRegression.run(check)
         print("REGRESSION PASS: \(checks) 项固定断言；不声称真机网络/WebView 已验证。")
     }
 }

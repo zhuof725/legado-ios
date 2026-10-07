@@ -1,5 +1,33 @@
 import Foundation
 
+/// A transport result, not a fabricated HTTP success. Code 0 means no HTTP
+/// status was available (for example, HTML returned by WebView or a data URL).
+struct HTTPResponseData: Sendable {
+    let body: String
+    let url: String
+    let code: Int
+    let headers: [String: String]
+
+    init(body: String, url: String, code: Int = 0, headers: [String: String] = [:]) {
+        self.body = body
+        self.url = url
+        self.code = code
+        self.headers = headers
+    }
+
+    init(body: String, response: URLResponse, fallbackURL: String) {
+        let http = response as? HTTPURLResponse
+        var fields: [String: String] = [:]
+        if let http = http {
+            for (key, value) in http.allHeaderFields {
+                fields[String(describing: key)] = String(describing: value)
+            }
+        }
+        self.init(body: body, url: response.url?.absoluteString ?? fallbackURL,
+                  code: http?.statusCode ?? 0, headers: fields)
+    }
+}
+
 /// Parses Legado-style URLs: `https://x.com/search?q={{key}}&p={{page}},{"method":"POST","body":"k={{key}}","charset":"gbk","headers":{...}}`
 struct AnalyzeUrl {
     var url: String
@@ -171,19 +199,30 @@ struct AnalyzeUrl {
         }.joined()
     }
 
+    /// Compatibility entry point for existing body/URL callers.
     func fetch() async throws -> (String, String) {
+        let response = try await fetchResponse()
+        return (response.body, response.url)
+    }
+
+    /// HTTP 4xx/5xx remain responses; transport errors and cancellation throw.
+    /// Session injection is local and does not register a global URLProtocol.
+    func fetchResponse(session: URLSession = .shared) async throws -> HTTPResponseData {
+        try Task.checkCancellation()
         if url.hasPrefix("data:") {
             var payload = ""
             if let r = url.range(of: "base64,") { payload = String(url[r.upperBound...]) }
             payload = payload.trimmingCharacters(in: .whitespacesAndNewlines)
             while payload.count % 4 != 0 { payload += "=" }
             let bytes = Data(base64Encoded: payload) ?? Data()
-            return (bytes.map { String(format: "%02x", $0) }.joined(), url)
+            return HTTPResponseData(body: bytes.map { String(format: "%02x", $0) }.joined(), url: url)
         }
         #if canImport(UIKit) && canImport(WebKit)
         if webView || (webJs?.isEmpty == false) {
-            return try await WebViewLoader.load(url: url, method: method, body: body.map { percentEncodedBody($0) },
-                                                headers: headers, js: webJs)
+            let result = try await WebViewLoader.load(url: url, method: method, body: body.map { percentEncodedBody($0) },
+                                                      headers: headers, js: webJs)
+            try Task.checkCancellation()
+            return HTTPResponseData(body: result.0, url: result.1)
         }
         #endif
         let finalUrl = url.contains("%") ? url : percentEncoded(url)
@@ -203,7 +242,8 @@ struct AnalyzeUrl {
             }
         }
         DebugLog.add("准备请求：\(method) \(DebugLog.url(finalUrl))；请求体 \(req.httpBody?.count ?? 0) 字节（内容隐藏）")
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await session.data(for: req)
+        try Task.checkCancellation()
         var enc = AnalyzeUrl.encoding(charset)
         if charset == nil, let n = (resp as? HTTPURLResponse)?.textEncodingName { enc = AnalyzeUrl.encoding(n) }
         var text = String(data: data, encoding: enc)
@@ -222,21 +262,31 @@ struct AnalyzeUrl {
                                                      headers: headers, js: webJs) {
                 // JSON API 在 WebView 中会渲染为 <pre>，不能把外层HTML交给 JSONPath。
                 // 同步验证 Cookie 后重新发原始请求，保留 POST 请求体。
+                try Task.checkCancellation()
                 await WebViewLoader.syncCookiesFromWebView()
-                if let retry = try? await URLSession.shared.data(for: req) {
+                try Task.checkCancellation()
+                if let retry = try? await session.data(for: req) {
+                    try Task.checkCancellation()
                     let retryStatus = (retry.1 as? HTTPURLResponse)?.statusCode ?? 0
                     let retryText = String(data: retry.0, encoding: enc) ?? String(data: retry.0, encoding: .utf8) ?? ""
                     DebugLog.add("验证后重试：HTTP \(retryStatus)，\(retry.0.count) 字节；\(DebugLog.summary(retryText))")
                     if (200...299).contains(retryStatus), !retryText.isEmpty, !WebViewSupport.isChallenge(retryText) {
-                        return (retryText, retry.1.url?.absoluteString ?? finalUrl)
+                        return HTTPResponseData(body: retryText, response: retry.1, fallbackURL: finalUrl)
                     }
                 }
-                if !r.0.isEmpty, !WebViewSupport.isChallenge(r.0) { return r }
+                try Task.checkCancellation()
+                if !r.0.isEmpty, !WebViewSupport.isChallenge(r.0) {
+                    // WebView only supplies HTML and URL: do not reuse the original
+                    // failure status/headers or invent a successful HTTP status.
+                    return HTTPResponseData(body: r.0, url: r.1)
+                }
             }
+            try Task.checkCancellation()
             DebugLog.add("浏览器重试未获得可用数据；保留原始失败响应")
         }
         #endif
-        return (text ?? "", resp.url?.absoluteString ?? url)
+        try Task.checkCancellation()
+        return HTTPResponseData(body: text ?? "", response: resp, fallbackURL: url)
     }
 
     /// 表单 body 按 key=value 逐项做 URL 编码（与 Legado 一致），charset 为 gbk 时按 GBK 字节编码
