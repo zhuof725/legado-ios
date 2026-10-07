@@ -276,9 +276,27 @@ final class JSEngine {
             return String(__cookieFromMap(JSON.stringify(map)));
         }
     };
+    function __javaMap(){
+        var m=Object.create(null);
+        function def(n,f){Object.defineProperty(m,n,{value:f,enumerable:false,writable:true,configurable:true});}
+        function own(){return Object.keys(m);}
+        def('get',function(k){var v=m[String(k)];return v===undefined?null:v;});
+        def('getOrDefault',function(k,d){var v=m[String(k)];return v===undefined?d:v;});
+        def('put',function(k,v){var o=m[String(k)];m[String(k)]=v;return o===undefined?null:o;});
+        def('remove',function(k){var o=m[String(k)];delete m[String(k)];return o===undefined?null:o;});
+        def('containsKey',function(k){return Object.prototype.hasOwnProperty.call(m,String(k));});
+        def('containsValue',function(v){return own().some(function(k){return m[k]===v;});});
+        def('isEmpty',function(){return own().length===0;});
+        def('size',function(){return own().length;});
+        def('keySet',function(){return own();});
+        def('values',function(){return own().map(function(k){return m[k];});});
+        def('forEach',function(f){own().forEach(function(k){f(m[k],k);});});
+        def('toString',function(){return JSON.stringify(m);});
+        return m;
+    }
     var cache={get:function(k){return java.storeGet(k)},put:function(k,v){return java.storePut(k,String(v))},getFromMemory:function(k){return java.storeGet(k)},putMemory:function(k,v){return java.storePut(k,String(v))}};
     var source={bookSourceUrl:'',bookSourceName:'',bookSourceComment:'',getKey:function(){return this.bookSourceUrl},getVariable:function(){return java.storeGet('__var_'+this.bookSourceUrl)},setVariable:function(v){java.storePut('__var_'+this.bookSourceUrl,String(v))},put:function(k,v){return java.storePut(k,String(v))},get:function(k){return java.storeGet(k)},
-        getLoginInfoMap:function(){var s=String(__loginInfoMap());var m=Object.create(null);try{var o=JSON.parse(s);Object.keys(o).forEach(function(k){m[k]=o[k];});}catch(e){}return m;},
+        getLoginInfoMap:function(){var s=String(__loginInfoMap());var m=__javaMap();try{var o=JSON.parse(s);Object.keys(o).forEach(function(k){m[k]=o[k];});}catch(e){}return m;},
         getLoginInfo:function(){var v=__loginGet();return v==null||v===''?null:String(v);},
         putLoginInfo:function(v){return __loginPut(String(v));},
         removeLoginInfo:function(){__loginRemove();},

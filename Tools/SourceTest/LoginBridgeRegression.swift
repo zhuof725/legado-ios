@@ -43,6 +43,9 @@ enum LoginBridgeRegression {
             check(js("String(source.putLoginInfo('{\"account\":\"u1\"}'))", ca) == "true",
                   "source.putLoginInfo stores")
             check(js("source.getLoginInfoMap().account", ca) == "u1", "stored login info is read back")
+            check(js("source.getLoginInfoMap().get('account')", ca) == "u1", "getLoginInfoMap().get(key) 读取已保存值（Kotlin Map 写法）")
+            check(js("String(source.getLoginInfoMap().get('nope'))", ca) == "null", "getLoginInfoMap().get 缺键返回 null")
+            check(js("var m=source.getLoginInfoMap(); [m.containsKey('account'), m.containsKey('nope'), m.getOrDefault('nope','d'), Object.keys(m).join(',')].join('|')", ca) == "true|false|d|account", "Map 方法不污染 Object.keys")
             check(js("String(source.getLoginInfoMap().account)", cb) == "undefined",
                   "login info is isolated per source key")
             js("source.putLoginHeader('{\"Cookie\":\"sid=abc\",\"X-T\":\"1\"}')", ca)
