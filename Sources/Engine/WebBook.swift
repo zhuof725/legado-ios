@@ -217,7 +217,25 @@ enum WebBook {
         return (raw, ContentBlocks.parse(raw))
     }
 
+    /// 书源 loginUi 是脚本时，里面常有 java.put('dev', …) 之类的初始化（Legado 打开登录页时才执行）。
+    /// 正文规则会读取这些变量，所以抓取前先求值一次，把变量写进书源作用域。每个书源每次启动只执行一次。
+    private static var loginUiPrimed = Set<String>()
+    private static let primeLock = NSLock()
+    static func primeLoginUi(_ source: BookSource) {
+        guard let ui = source.loginUi, !ui.isEmpty else { return }
+        let raw = ui.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard raw.hasPrefix("@js:") || raw.hasPrefix("<js>") else { return }
+        primeLock.lock()
+        let first = loginUiPrimed.insert(source.bookSourceUrl).inserted
+        primeLock.unlock()
+        guard first else { return }
+        _ = SourceLoginForm.resolveUiText(ui) { js in
+            JSEngine.shared.evalString(js, jsLib: source.jsLib, context: RuleContext(source: source))
+        }
+    }
+
     static func rawContent(source: BookSource, chapter: BookChapter, nextChapterUrl: String? = nil, book: Book? = nil) async throws -> String {
+        primeLoginUi(source)
         guard let rule = source.ruleContent else { return "" }
         var visited = Set<String>()
         var parts: [String] = []

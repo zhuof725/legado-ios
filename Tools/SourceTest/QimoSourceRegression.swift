@@ -34,6 +34,15 @@ enum QimoSourceRegression {
         check(req.method == "POST" && (req.body ?? "").contains("keyword=斗罗"), "柒默：搜索请求为 POST 且带关键词")
         check((req.headers["QDSign"] ?? "").isEmpty == false && (req.headers["QDInfo"] ?? "").isEmpty == false, "柒默：搜索请求头带 QDSign/QDInfo")
 
+        // loginUi 脚本里的 java.put('dev', …) 必须在读取正文前生效，否则正文会走 Android 的大图评论分支。
+        let fresh = try JSONDecoder().decode(BookSource.self, from: data)
+        check(JSEngine.shared.evalString("java.get('dev')", context: RuleContext(source: fresh)) == "", "柒默：未初始化时 dev 为空")
+        WebBook.primeLoginUi(fresh)
+        let dev = JSEngine.shared.evalString("java.get('dev')", context: RuleContext(source: fresh)) ?? ""
+        check(dev == "ios" || dev == "android", "柒默：求值 loginUi 后 dev 已写入书源作用域（得到 \(dev)）")
+        let withBook = RuleContext(source: fresh, book: Book(bookUrl: "https://qimo-chk.invalid/b", name: "x", origin: fresh.bookSourceUrl))
+        check(JSEngine.shared.evalString("java.get('dev')", context: withBook) == dev, "柒默：dev 对该书源的书和章节上下文同样可见")
+
         // 书源配置：评论开关的存取
         _ = JSEngine.shared.evalString("source.setVariable(JSON.stringify({'评论':'已关'}))", context: ctx)
         check(js("hqbl('评论')") == "已关", "柒默：评论开关从书源变量读取")
