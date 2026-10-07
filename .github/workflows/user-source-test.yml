@@ -7,6 +7,10 @@ on:
         description: 搜索关键词
         required: true
         default: 斗罗大陆
+      file:
+        description: 书源文件（仓库内路径）
+        required: false
+        default: user-sources.json
 
 jobs:
   test:
@@ -45,10 +49,11 @@ jobs:
       - name: Test uploaded sources
         env:
           TEST_KEY: ${{ github.event.inputs.key }}
+          SOURCES_FILE: ${{ github.event.inputs.file }}
         run: |
           set -o pipefail
           KEY="$TEST_KEY"
-          $RUNNER_TEMP/pkg/.build/release/SourceTest user-sources.json "$KEY" 90 2>&1 | tee user-source-test.log
+          $RUNNER_TEMP/pkg/.build/release/SourceTest "${SOURCES_FILE:-user-sources.json}" "$KEY" 90 2>&1 | tee user-source-test.log
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
