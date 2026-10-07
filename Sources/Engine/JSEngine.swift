@@ -165,22 +165,8 @@ final class JSEngine {
     var source={bookSourceUrl:'',bookSourceName:'',bookSourceComment:'',getKey:function(){return this.bookSourceUrl},getVariable:function(){return java.storeGet('__var_'+this.bookSourceUrl)},setVariable:function(v){java.storePut('__var_'+this.bookSourceUrl,String(v))},put:function(k,v){return java.storePut(k,String(v))},get:function(k){return java.storeGet(k)}};
     var book={name:'',author:'',bookUrl:'',tocUrl:'',getVariable:function(){return ''},setVariable:function(){}};
     var chapter={title:'',url:'',index:0};
-    var Packages={org:{jsoup:{Jsoup:{parse:function(html){
-        function listFor(q){
-            var arr=typeof __ruleGetElements==='function'?__ruleGetElements('@css:'+q):[];
-            arr.size=function(){return arr.length};
-            arr.get=function(i){return arr[i]};
-            arr.toArray=function(){return arr};
-            arr.text=function(){return arr.map(function(x){return x&&x.text?x.text():String(x)}).join(' ')};
-            arr.attr=function(k){var x=arr[0];return x&&x.attr?x.attr(k):''};
-            arr.html=function(){var x=arr[0];return x&&x.html?x.html():''};
-            arr.outerHtml=function(){var x=arr[0];return x&&x.outerHtml?x.outerHtml():''};
-            arr.remove=function(){return arr};
-            return arr;
-        }
-        var root={select:function(q){return listFor(q)},text:function(){return String(html)},html:function(){return String(html)},toString:function(){return String(html)}};
-        return root;
-    }}}}};
+    var Packages={org:{jsoup:{Jsoup:{parse:function(html){return __jsoupParse(String(html));}}}}};
+    var org=Packages.org;
     function __response(r){
         if(!r){return null;}
         return {
@@ -198,14 +184,30 @@ final class JSEngine {
     java.startBrowserAwait=function(u,t){return java.connect(String(u))};
     java.startBrowser=function(u,t){return ''};
     java.webView=function(h,u,js){return java.ajax(String(u))};
-    java.get=function(u,h){return __response(java.httpGetNative(String(u),JSON.stringify(h||{})))};
+    var __localRuleVars=Object.create(null);
+    java.put=function(k,v){
+        k=String(k);v=String(v);
+        if(typeof __contextPut==='function'){return __contextPut(k,v);}
+        __localRuleVars[k]=v;return v;
+    };
+    java.get=function(k,h){
+        if(arguments.length===1){
+            k=String(k);
+            if(typeof __contextGet==='function'){return String(__contextGet(k));}
+            return Object.prototype.hasOwnProperty.call(__localRuleVars,k)?__localRuleVars[k]:'';
+        }
+        return __response(java.httpGetNative(String(k),JSON.stringify(h||{})));
+    };
     java.post=function(u,b,h){return __response(java.httpPostNative(String(u),String(b),JSON.stringify(h||{})))};
     java.getCookie=function(u,k){return ''};
-    java.getString=function(r){return (typeof __ruleGetString==='function')?String(__ruleGetString(String(r))):''};
+    java.getString=function(r,c){
+        if(arguments.length>1){return String(__ruleGetStringFrom(String(r),c));}
+        return String(__ruleGetString(String(r)));
+    };
     java.getStringList=function(r){var s=java.getString(r);return s?s.split('\\n'):[]};
     java.getElement=function(r){return (typeof __ruleGetElements==='function')?__ruleGetElements(String(r))[0]:null};
     java.getElements=function(r){return (typeof __ruleGetElements==='function')?__ruleGetElements(String(r)):[]};
-    java.setContent=function(c){result=c};
+    java.setContent=function(c){__ruleSetContent(c);result=c};
     java.getCookie=function(){return ''};
     java.utf8ToGbk=function(s){return s};
     java.t2s=function(s){return s};java.s2t=function(s){return s};
@@ -253,35 +255,65 @@ final class JSEngine {
               vars: [String: Any] = [:], jsLib: String? = nil,
               rule: AnalyzeRule? = nil, ruleInput: Any? = nil,
               context: RuleContext? = nil) -> Any? {
-        let ctx = makeContext(context)
-        if let c = context {
+        let effectiveContext = context ?? rule?.context
+        let ctx = makeContext(effectiveContext)
+        if let c = effectiveContext {
             let put: @convention(block) (String, String) -> String = { c.put($0, $1) }
             let get: @convention(block) (String) -> String = { c.get($0) }
             ctx.setObject(put, forKeyedSubscript: "__contextPut" as NSString)
             ctx.setObject(get, forKeyedSubscript: "__contextGet" as NSString)
         }
-        if let r = rule {
-            let input = ruleInput
-            let gs: @convention(block) (String) -> String = { s in r.getString(s, from: input) }
-            let ge: @convention(block) (String) -> [Any] = { s in
-                r.getElements(s, from: input).map { value in
-                    if let element = value as? Element { return JSNodeBridge(element) }
-                    if let list = value as? [Element] { return JSNodeListBridge(list) }
-                    return AnalyzeRule.jsValue(value)
-                }
+        // Query state belongs to this eval only; never mutate the supplied analyzer.
+        let r = rule ?? AnalyzeRule(content: JSNodeBridge.unwrap(result ?? ""),
+                                    baseUrl: baseUrl ?? "", jsLib: jsLib,
+                                    context: effectiveContext ?? RuleContext())
+        var input: Any = JSNodeBridge.unwrap(ruleInput ?? r.content)
+        func queryInput(_ value: JSValue) -> Any {
+            // Explicit null/undefined means empty content, not the current document.
+            if value.isNull || value.isUndefined {
+                return AnalyzeRule.parse("", baseUrl: r.baseUrl)
             }
-            ctx.setObject(gs, forKeyedSubscript: "__ruleGetString" as NSString)
-            ctx.setObject(ge, forKeyedSubscript: "__ruleGetElements" as NSString)
+            let native = JSNodeBridge.unwrap(value.toObject() ?? "")
+            if let html = native as? String {
+                return AnalyzeRule.parse(html, baseUrl: r.baseUrl)
+            }
+            return native
         }
-        if let lib = jsLib, !lib.isEmpty, !lib.hasPrefix("{") { ctx.evaluateScript(lib) }
+        let gs: @convention(block) (String) -> String = { s in
+            r.getString(s, from: input)
+        }
+        let gsFrom: @convention(block) (String, JSValue) -> String = { s, value in
+            r.getString(s, from: queryInput(value))
+        }
+        let setContent: @convention(block) (JSValue) -> Void = { value in
+            input = queryInput(value)
+        }
+        let ge: @convention(block) (String) -> [Any] = { s in
+            r.getElements(s, from: input).map { value in
+                if let element = value as? Element { return JSNodeBridge(element) }
+                if let list = value as? [Element] { return JSNodeListBridge(list) }
+                return AnalyzeRule.jsValue(value)
+            }
+        }
+        let parseHTML: @convention(block) (String) -> JSNodeBridge? = { html in
+            guard let document = try? SwiftSoup.parse(html, r.baseUrl) else { return nil }
+            return JSNodeBridge(document)
+        }
+        ctx.setObject(gs, forKeyedSubscript: "__ruleGetString" as NSString)
+        ctx.setObject(gsFrom, forKeyedSubscript: "__ruleGetStringFrom" as NSString)
+        ctx.setObject(setContent, forKeyedSubscript: "__ruleSetContent" as NSString)
+        ctx.setObject(ge, forKeyedSubscript: "__ruleGetElements" as NSString)
+        ctx.setObject(parseHTML, forKeyedSubscript: "__jsoupParse" as NSString)
         ctx.setObject(result ?? "", forKeyedSubscript: "result" as NSString)
         ctx.setObject(baseUrl ?? "", forKeyedSubscript: "baseUrl" as NSString)
         ctx.setObject(result ?? "", forKeyedSubscript: "src" as NSString)
         for (k, v) in vars { ctx.setObject(v, forKeyedSubscript: k as NSString) }
+        if let lib = jsLib, !lib.isEmpty, !lib.hasPrefix("{") { ctx.evaluateScript(lib) }
         guard let v = ctx.evaluateScript(script), !v.isUndefined, !v.isNull else { return nil }
         if v.isString || v.isNumber || v.isBoolean { return v.toString() }
-        if v.isArray { return v.toArray() }
-        return v.toObject() ?? v.toString()
+        if v.isArray { return JSNodeBridge.unwrap(v.toArray() ?? []) }
+        if let object = v.toObject() { return JSNodeBridge.unwrap(object) }
+        return v.toString()
     }
 
     func evalString(_ script: String, result: Any? = nil, baseUrl: String? = nil,

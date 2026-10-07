@@ -43,26 +43,28 @@ final class AnalyzeRule {
     // MARK: - JS splitting
 
     private func splitJS(_ rule: String) -> [(Bool, String)] {
+        // Match Kotlin AppPattern.JS_PATTERN; RuleScanner is not a JS lexer.
+        guard let regex = try? NSRegularExpression(
+            pattern: "<js>([\\s\\S]*?)</js>|@js:([\\s\\S]*)",
+            options: [.caseInsensitive]
+        ) else { return [(false, rule)] }
+        let source = rule as NSString
         var parts: [(Bool, String)] = []
-        var rest = rule
-        while let r = rest.range(of: "<js>") {
-            let before = String(rest[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !before.isEmpty { parts.append((false, before)) }
-            let after = rest[r.upperBound...]
-            if let e = after.range(of: "</js>") {
-                parts.append((true, String(after[..<e.lowerBound])))
-                rest = String(after[e.upperBound...])
-            } else {
-                parts.append((true, String(after))); rest = ""
+        var cursor = 0
+        for match in regex.matches(in: rule, range: NSRange(location: 0, length: source.length)) {
+            if match.range.location > cursor {
+                let before = source.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !before.isEmpty { parts.append((false, before)) }
             }
+            let block = match.range(at: 1)
+            let script = block.location != NSNotFound ? block : match.range(at: 2)
+            parts.append((true, source.substring(with: script)))
+            cursor = NSMaxRange(match.range)
         }
-        if let r = rest.range(of: "@js:", options: .caseInsensitive) {
-            let before = String(rest[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !before.isEmpty { parts.append((false, before)) }
-            parts.append((true, String(rest[r.upperBound...])))
-        } else {
-            let t = rest.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !t.isEmpty { parts.append((false, t)) }
+        if cursor < source.length {
+            let tail = source.substring(from: cursor).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tail.isEmpty { parts.append((false, tail)) }
         }
         return parts
     }
@@ -83,23 +85,28 @@ final class AnalyzeRule {
     /// Legado 会在执行 @js:/<js> 前先展开其中的 {{规则}}。
     /// 例如 `{{$.bid}}` 必须从当前 JSON 节点取值，而不能直接交给 JSCore 解析。
     private func expandEmbeddedTemplates(_ script: String, input: Any) -> String {
-        guard let re = try? NSRegularExpression(pattern: "\\{\\{([\\s\\S]*?)\\}\\}") else { return script }
-        var output = script
-        let ns = script as NSString
-        for match in re.matches(in: script, range: NSRange(location: 0, length: ns.length)).reversed() {
-            let expression = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-            let value: String
-            if expression == "baseUrl" { value = baseUrl }
-            else if expression == "host" { value = resolvedHost() }
-            else if expression.hasPrefix("@get:") { value = context.get(String(expression.dropFirst(5))) }
-            else if expression.hasPrefix("@") || expression.hasPrefix("$." ) || expression.hasPrefix("$[") || expression.hasPrefix("//") {
-                value = singleString(input, expression.hasPrefix("@@") ? String(expression.dropFirst(2)) : expression)
-            } else {
-                value = AnalyzeRule.asString(JSEngine.shared.eval(expression, result: AnalyzeRule.jsValue(input), baseUrl: baseUrl, context: context) ?? "")
+        RuleScanner.replaceGroups(script, marker: "{{") { inner in
+            let expression = inner.trimmingCharacters(in: .whitespacesAndNewlines)
+            if expression == "baseUrl" { return self.baseUrl }
+            if expression == "host" { return self.resolvedHost() }
+            if expression.lowercased().hasPrefix("@get:") {
+                let key = String(expression.dropFirst(5))
+                if key.hasPrefix("{"),
+                   let group = RuleScanner.balancedRange(key, at: key.startIndex),
+                   group.upperBound == key.endIndex {
+                    return self.context.get(String(key.dropFirst().dropLast()))
+                }
+                return self.context.get(key)
             }
-            output = (output as NSString).replacingCharacters(in: match.range, with: value)
+            if expression.hasPrefix("@") || expression.hasPrefix("$.") || expression.hasPrefix("$[") || expression.hasPrefix("//") {
+                return self.stringValue(input, expression)
+            }
+            // Evaluate once directly; runJS would expand the same template again.
+            return AnalyzeRule.asString(JSEngine.shared.eval(
+                expression, result: AnalyzeRule.jsValue(input), baseUrl: self.baseUrl,
+                jsLib: self.jsLib, rule: self, ruleInput: input, context: self.context
+            ) ?? "")
         }
-        return output
     }
 
     static func jsValue(_ v: Any) -> Any {
@@ -131,7 +138,8 @@ final class AnalyzeRule {
     }
 
     func getElements(_ rule: String?, from obj: Any? = nil) -> [Any] {
-        guard let rule = rule, !rule.isEmpty else { return [] }
+        guard let rawRule = rule, !rawRule.isEmpty else { return [] }
+        let rule = resolvePut(rawRule, from: obj)
         var cur: Any = obj ?? content
         for (isJs, s) in splitJS(rule) {
             if isJs { cur = runJS(s, cur) }
@@ -150,47 +158,34 @@ final class AnalyzeRule {
     }
 
     private func resolvePut(_ raw: String, from obj: Any?) -> String {
-        guard let re = try? NSRegularExpression(pattern: "@put:\\{([^{}]*)\\}") else { return raw }
-        var out = raw
-        let ns = raw as NSString
-        for m in re.matches(in: raw, range: NSRange(location: 0, length: ns.length)).reversed() {
-            let body = ns.substring(with: m.range(at: 1))
-            var values: [String: String] = [:]
-            for pair in body.split(separator: ",") {
-                let parts = pair.split(separator: ":", maxSplits: 1).map(String.init)
-                guard parts.count == 2 else { continue }
-                let key = parts[0].trimmingCharacters(in: CharacterSet(charactersIn: " \\\"'"))
-                let valueRule = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: " \\\"'"))
-                if !key.isEmpty { values[key] = singleString(obj ?? content, valueRule) }
+        RuleScanner.replaceGroups(raw, marker: "@put:{", caseInsensitive: true) { body in
+            let pairs = RuleScanner.split(body, by: [","])
+            guard pairs.valid else { return "@put:{" + body + "}" }
+            var rules: [(String, String)] = []
+            for pair in pairs.parts {
+                guard let colon = RuleScanner.firstTopLevel(pair, [":"]) else {
+                    return "@put:{" + body + "}"
+                }
+                let rawKey = String(pair[..<colon.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let rawValue = String(pair[colon.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let key = RuleScanner.unquote(rawKey) ?? rawKey
+                let valueRule = RuleScanner.unquote(rawValue) ?? rawValue
+                guard !key.isEmpty else { return "@put:{" + body + "}" }
+                rules.append((key, valueRule))
             }
-            context.putAll(values)
-            out = (out as NSString).replacingCharacters(in: m.range, with: "")
+            var values: [String: String] = [:]
+            for (key, valueRule) in rules {
+                values[key] = self.stringValue(obj ?? self.content, valueRule)
+            }
+            self.context.putAll(values)
+            return ""
         }
-        return out
     }
 
     // MARK: - String rules
 
     private func topLevelRegexMarker(in s: String) -> Range<String.Index>? {
-        var i = s.startIndex
-        var templateDepth = 0
-        while i < s.endIndex {
-            if s[i...].hasPrefix("{{") {
-                templateDepth += 1
-                i = s.index(i, offsetBy: 2)
-                continue
-            }
-            if s[i...].hasPrefix("}}") {
-                templateDepth = max(0, templateDepth - 1)
-                i = s.index(i, offsetBy: 2)
-                continue
-            }
-            if templateDepth == 0 && s[i...].hasPrefix("##") {
-                return i..<s.index(i, offsetBy: 2)
-            }
-            i = s.index(after: i)
-        }
-        return nil
+        RuleScanner.firstTopLevel(s, ["##"])
     }
 
     private func stringValue(_ obj: Any, _ rawRule: String) -> String {
@@ -207,15 +202,38 @@ final class AnalyzeRule {
             if tail.hasSuffix("###") { firstOnly = true }
         }
         var out: String
+        let combination = RuleScanner.split(rule, by: ["&&", "||", "%%"])
         if rule.contains("{{") {
             out = template(obj, rule)
-        } else if rule.contains("||") {
-            out = ""
-            for r in rule.components(separatedBy: "||") {
-                let v = singleString(obj, r); if !v.isEmpty { out = v; break }
+        } else if rule.range(of: "@get:{", options: .caseInsensitive) != nil {
+            // Kotlin treats @get substitutions as literal output, not a new selector.
+            out = RuleScanner.replaceGroups(rule, marker: "@get:{", caseInsensitive: true) {
+                self.context.get($0)
             }
-        } else if rule.contains("&&") {
-            out = rule.components(separatedBy: "&&").map { singleString(obj, $0) }.filter { !$0.isEmpty }.joined(separator: "\n")
+        } else if !combination.valid {
+            out = ""
+        } else if combination.parts.count > 1 {
+            let forceDefault = rule.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("@@")
+            let parts = combination.parts.map { part -> String in
+                let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+                return forceDefault && !trimmed.hasPrefix("@@") ? "@@" + trimmed : trimmed
+            }
+            switch combination.separator {
+            case "||":
+                out = ""
+                for part in parts {
+                    let value = stringValue(obj, part)
+                    if !value.isEmpty { out = value; break }
+                }
+            case "%%":
+                let lists: [[Any]] = parts.map { part in
+                    self.stringValue(obj, part).split(separator: "\n").map { String($0) as Any }
+                }
+                out = AnalyzeRule.interleave(lists).map { AnalyzeRule.asString($0) }.joined(separator: "\n")
+            default:
+                out = parts.map { self.stringValue(obj, $0) }
+                    .filter { !$0.isEmpty }.joined(separator: "\n")
+            }
         } else if rule.contains("{$.") {
             out = replaceBraces(rule, pattern: "\\{(\\$\\.[^}]+)\\}") { self.singleString(obj, $0) }
         } else {
@@ -237,14 +255,21 @@ final class AnalyzeRule {
     }
 
     private func template(_ obj: Any, _ rule: String) -> String {
-        replaceBraces(rule, pattern: "\\{\\{([\\s\\S]*?)\\}\\}") { inner in
-            let t = inner.trimmingCharacters(in: .whitespaces)
-            if t == "baseUrl" { return baseUrl }
-            if t == "host" { return resolvedHost() }
-            if t.hasPrefix("@get:") { return context.get(String(t.dropFirst(5))) }
+        RuleScanner.replaceGroups(rule, marker: "{{") { inner in
+            let t = inner.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t == "baseUrl" { return self.baseUrl }
+            if t == "host" { return self.resolvedHost() }
+            if t.lowercased().hasPrefix("@get:") {
+                let key = String(t.dropFirst(5))
+                if key.hasPrefix("{"),
+                   let group = RuleScanner.balancedRange(key, at: key.startIndex),
+                   group.upperBound == key.endIndex {
+                    return self.context.get(String(key.dropFirst().dropLast()))
+                }
+                return self.context.get(key)
+            }
             if t.hasPrefix("@") || t.hasPrefix("$.") || t.hasPrefix("$[") || t.hasPrefix("//") {
-                let rule = t.hasPrefix("@@") ? String(t.dropFirst(2)) : t
-                return self.stringValue(obj, rule)
+                return self.stringValue(obj, t)
             }
             return AnalyzeRule.asString(self.runJS(t, obj))
         }
@@ -262,45 +287,51 @@ final class AnalyzeRule {
     }
 
     private func singleString(_ obj: Any, _ r: String) -> String {
-        let rule = r.trimmingCharacters(in: .whitespacesAndNewlines)
+        var rule = r.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forceDefault = rule.hasPrefix("@@")
+        if forceDefault { rule = String(rule.dropFirst(2)) }
         if rule.isEmpty { return "" }
-        // JSON 对象上的简写字段名（Legado 教程的 body.books / author 写法）
-        if (obj is [String: Any] || obj is [Any]), JsonPath.isSimpleKeyRule(rule) {
-            return JsonPath.query(obj, rule).map { AnalyzeRule.asString($0) }.joined(separator: "\n")
-        }
-        if isJsonRule(rule, obj) {
+        if !forceDefault, isJsonRule(rule, obj) {
             return JsonPath.query(jsonRoot(obj), stripPrefix(rule)).map { AnalyzeRule.asString($0) }.joined(separator: "\n")
         }
-        if XPathRule.isXPath(rule) { return XPathRule.string(obj, rule) }
+        if !forceDefault, XPathRule.isXPath(rule) { return XPathRule.string(obj, rule) }
         let isCss = rule.lowercased().hasPrefix("@css:")
         let body = isCss ? String(rule.dropFirst(5)) : rule
-        guard let idx = body.range(of: "@", options: .backwards) else {
-            // only attribute or only selector
+        let segments = RuleScanner.split(body, by: ["@"])
+        guard segments.valid else { return "" }
+        guard segments.parts.count > 1 else {
+            // A bare default rule extracts an attribute; @css selects text.
             if let el = AnalyzeRule.element(obj) {
                 if isCss { return elementsText((try? el.select(body).array()) ?? [], "text") }
                 return elementsText([el], body)
             }
-            return AnalyzeRule.asString(obj)
+            return forceDefault ? "" : AnalyzeRule.asString(obj)
         }
-        let sel = String(body[..<idx.lowerBound])
-        let attr = String(body[idx.upperBound...])
+        let sel = segments.parts.dropLast().joined(separator: "@")
+        let attr = segments.parts.last ?? ""
         let els: [Element]
-        if isCss { els = (try? AnalyzeRule.element(obj)?.select(sel).array()) ?? [] }
+        if sel.isEmpty { els = AnalyzeRule.element(obj).map { [$0] } ?? [] }
+        else if isCss { els = (try? AnalyzeRule.element(obj)?.select(sel).array()) ?? [] }
         else { els = defaultElements(obj, sel) }
         return elementsText(els, attr)
     }
 
     private func elementsText(_ els: [Element], _ attr: String) -> String {
-        els.compactMap { e -> String? in
+        var seen = Set<String>()
+        return els.compactMap { e -> String? in
             switch attr {
             case "text": return try? e.text()
             case "ownText": return e.ownText()
             case "textNodes": return e.textNodes().map { $0.text() }.joined(separator: "\n")
             case "html":
                 _ = try? e.select("script,style").remove()
-                return try? e.html()
+                return try? e.outerHtml()
             case "all": return try? e.outerHtml()
-            default: return try? e.attr(attr)
+            default:
+                guard let value = try? e.attr(attr),
+                      !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      seen.insert(value).inserted else { return nil }
+                return value
             }
         }.filter { !$0.isEmpty }.joined(separator: "\n")
     }
@@ -308,38 +339,53 @@ final class AnalyzeRule {
     // MARK: - Element rules
 
     private func elementsValue(_ obj: Any, _ r: String) -> [Any] {
-        let rule = r.trimmingCharacters(in: .whitespacesAndNewlines)
-        if rule.contains("||") {
-            for x in rule.components(separatedBy: "||") { let v = elementsValue(obj, x); if !v.isEmpty { return v } }
-            return []
+        var rule = r.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forceDefault = rule.hasPrefix("@@")
+        if forceDefault { rule = String(rule.dropFirst(2)) }
+        // AllInOne is a regex, not a list of selector combinations.
+        if !forceDefault, rule.hasPrefix(":") {
+            return AnalyzeRule.allInOne(obj, String(rule.dropFirst()))
         }
-        if rule.contains("&&") { return rule.components(separatedBy: "&&").flatMap { elementsValue(obj, $0) } }
-        if rule.contains("%%") { return AnalyzeRule.interleave(rule.components(separatedBy: "%%").map { elementsValue(obj, $0) }) }
+        let combination = RuleScanner.split(rule, by: ["&&", "||", "%%"])
+        guard combination.valid else { return [] }
+        if combination.parts.count > 1 {
+            let parts = combination.parts.map { forceDefault ? "@@" + $0 : $0 }
+            switch combination.separator {
+            case "||":
+                for part in parts {
+                    let values = elementsValue(obj, part)
+                    if !values.isEmpty { return values }
+                }
+                return []
+            case "%%":
+                return AnalyzeRule.interleave(parts.map { self.elementsValue(obj, $0) })
+            default:
+                return parts.flatMap { self.elementsValue(obj, $0) }
+            }
+        }
         var main = rule, reverse = false
         if main.hasPrefix("-") { reverse = true; main.removeFirst() }
         if main.hasPrefix("+") { main.removeFirst() }
         var res: [Any]
-        if main.hasPrefix(":") {
+        if !forceDefault, main.hasPrefix(":") {
             res = AnalyzeRule.allInOne(obj, String(main.dropFirst()))
-        } else if isJsonRule(main, obj) {
+        } else if !forceDefault, isJsonRule(main, obj) {
             res = JsonPath.query(jsonRoot(obj), stripPrefix(main)).flatMap { ($0 as? [Any]) ?? [$0] }
-        } else if XPathRule.isXPath(main) {
+        } else if !forceDefault, XPathRule.isXPath(main) {
             res = XPathRule.elements(obj, main)
         } else if main.lowercased().hasPrefix("@css:") {
             res = (try? AnalyzeRule.element(obj)?.select(String(main.dropFirst(5))).array()) ?? []
         } else {
             res = defaultElements(obj, main)
         }
-        return reverse ? res.reversed() : res
+        return reverse ? Array(res.reversed()) : res
     }
 
     private func defaultElements(_ obj: Any, _ rule: String) -> [Element] {
-        if (obj is [String: Any] || obj is [Any]), JsonPath.isSimpleKeyRule(rule) {
-            return JsonPath.query(obj, rule) as? [Element] ?? []
-        }
-        guard let root = AnalyzeRule.element(obj) else { return [] }
+        let segments = RuleScanner.split(rule, by: ["@"])
+        guard segments.valid, let root = AnalyzeRule.element(obj) else { return [] }
         var cur: [Element] = [root]
-        for seg in rule.components(separatedBy: "@") where !seg.isEmpty {
+        for seg in segments.parts where !seg.isEmpty {
             cur = cur.flatMap { applySegment($0, seg) }
         }
         return cur
@@ -441,107 +487,5 @@ final class AnalyzeRule {
             }
             return "\(v)"
         }
-    }
-}
-
-/// Minimal JSONPath: $.a.b, $..a, [n], [-1], [*], ['k'], .*
-enum JsonPath {
-    static func query(_ root: Any, _ path: String) -> [Any] {
-        var p = path.trimmingCharacters(in: .whitespaces)
-        if p.hasPrefix("$") { p.removeFirst() }
-        var cur: [Any] = [root]
-        var i = p.startIndex
-        while i < p.endIndex {
-            if p[i...].hasPrefix("..") {
-                i = p.index(i, offsetBy: 2)
-                let key = readKey(p, &i)
-                cur = cur.flatMap { deep($0, key) }
-            } else if p[i] == "." {
-                i = p.index(after: i)
-                // Legado 允许 $.[*]、$.chapters.[*]；这里的点不能产生空字段。
-                if i < p.endIndex && p[i] == "[" { continue }
-                let key = readKey(p, &i)
-                if key.isEmpty { continue }
-                cur = cur.flatMap { child($0, key) }
-            } else if p[i] == "[" {
-                guard let end = p[i...].firstIndex(of: "]") else { break }
-                let inner = String(p[p.index(after: i)..<end]).trimmingCharacters(in: CharacterSet(charactersIn: "'\" "))
-                i = p.index(after: end)
-                cur = cur.flatMap { node -> [Any] in
-                    if inner.hasPrefix("?") {
-                        return filter(node, expression: String(inner.dropFirst()).trimmingCharacters(in: CharacterSet(charactersIn: "() ")))
-                    }
-                    if inner == "*" { return child(node, "*") }
-                    if let n = Int(inner), let a = node as? [Any] {
-                        let j = n < 0 ? a.count + n : n
-                        return (j >= 0 && j < a.count) ? [a[j]] : []
-                    }
-                    return child(node, inner)
-                }
-            } else {
-                let key = readKey(p, &i)
-                cur = cur.flatMap { child($0, key) }
-            }
-        }
-        return cur
-    }
-
-    private static func filter(_ node: Any, expression: String) -> [Any] {
-        let array: [Any]
-        if let a = node as? [Any] { array = a }
-        else if let d = node as? [String: Any] { array = Array(d.values) }
-        else { return [] }
-        let exp = expression.replacingOccurrences(of: "@.", with: "")
-        let ops = ["==", "!=", " contains "]
-        guard let op = ops.first(where: { exp.contains($0) }) else { return array }
-        let parts = exp.components(separatedBy: op)
-        guard parts.count == 2 else { return array }
-        let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-        let expected = parts[1].trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "'\"")))
-        return array.filter { item in
-            let actual: String
-            if let d = item as? [String: Any] { actual = String(describing: d[key] ?? "") }
-            else { actual = String(describing: item) }
-            if op == "==" { return actual == expected }
-            if op == "!=" { return actual != expected }
-            return actual.localizedCaseInsensitiveContains(expected)
-        }
-    }
-
-    /// 简写键规则：仅允许字段名、点号字段、数组下标，避免把 CSS/XPath 当 JSONPath。
-    static func isSimpleKeyRule(_ rule: String) -> Bool {
-        let t = rule.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, !t.contains(" ") && !t.contains("@") && !t.contains("#") else { return false }
-        if t.hasPrefix("$") { return true }
-        if t.hasPrefix(".") || t.hasPrefix("/") || t.hasPrefix(":") || t.hasPrefix("<") { return false }
-        return t.range(of: "^[A-Za-z0-9_\\[\\]'\\s\\.\\-]+$", options: .regularExpression) != nil
-    }
-
-    private static func readKey(_ p: String, _ i: inout String.Index) -> String {
-        let start = i
-        while i < p.endIndex, p[i] != ".", p[i] != "[" { i = p.index(after: i) }
-        return String(p[start..<i])
-    }
-
-    private static func child(_ node: Any, _ key: String) -> [Any] {
-        if key == "*" {
-            if let a = node as? [Any] { return a }
-            if let d = node as? [String: Any] { return Array(d.values) }
-            return []
-        }
-        if let d = node as? [String: Any], let v = d[key] { return [v] }
-        if let a = node as? [Any] { return a.flatMap { child($0, key) } }
-        return []
-    }
-
-    private static func deep(_ node: Any, _ key: String) -> [Any] {
-        var out: [Any] = []
-        if let d = node as? [String: Any] {
-            if let v = d[key] { out.append(v) }
-            for v in d.values { out += deep(v, key) }
-        } else if let a = node as? [Any] {
-            for v in a { out += deep(v, key) }
-        }
-        return out
     }
 }

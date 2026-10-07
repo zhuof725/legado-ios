@@ -4,29 +4,44 @@ enum WebBook {
     // MARK: Search
     static func search(source: BookSource, key: String, page: Int = 1) async throws -> [Book] {
         guard let su = source.searchUrl, !su.isEmpty, let rule = source.ruleSearch else { return [] }
-        let au = AnalyzeUrl(rawUrl: su, key: key, page: page, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: RuleContext(source: source), jsLib: source.jsLib)
+        let context = RuleContext(source: source)
+        let au = AnalyzeUrl(rawUrl: su, key: key, page: page, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: context, jsLib: source.jsLib)
         let (body, url) = try await au.fetch()
-        return parseBookList(source: source, body: body, baseUrl: url, rule: rule)
+        return parseBookList(source: source, body: body, baseUrl: url, rule: rule, context: context)
     }
 
-    static func parseBookList(source: BookSource, body: String, baseUrl: String, rule: SearchRule) -> [Book] {
-        let ar = AnalyzeRule(content: body, baseUrl: baseUrl, jsLib: source.jsLib, context: RuleContext(source: source))
+    static func parseBookList(source: BookSource, body: String, baseUrl: String, rule: SearchRule, context: RuleContext? = nil) -> [Book] {
+        let listContext = context ?? RuleContext(source: source)
+        let ar = AnalyzeRule(content: body, baseUrl: baseUrl, jsLib: source.jsLib, context: listContext)
         let items = ar.getElements(rule.bookList)
+        // 冻结列表阶段变量；每个条目再独立派生，避免循环中的写入串书。
+        let snapshot = listContext.forkForBook(Book(bookUrl: "", name: "", origin: source.bookSourceUrl))
         var out: [Book] = []
         for item in items {
-            let name = ar.getString(rule.name, from: item)
-            if name.isEmpty { continue }
-            var bookUrl = ar.getString(rule.bookUrl, from: item)
-            bookUrl = bookUrl.isEmpty ? baseUrl : AnalyzeUrl.absolute(bookUrl.components(separatedBy: "\n").first ?? bookUrl, base: baseUrl)
-            var b = Book(bookUrl: bookUrl, name: name, origin: source.bookSourceUrl)
+            var b = Book(bookUrl: "", name: "", origin: source.bookSourceUrl)
             b.originName = source.bookSourceName
-            b.author = ar.getString(rule.author, from: item)
-            b.intro = nilIfEmpty(ar.getString(rule.intro, from: item))
-            b.kind = nilIfEmpty(ar.getString(rule.kind, from: item))
-            b.lastChapter = nilIfEmpty(ar.getString(rule.lastChapter, from: item))
-            b.wordCount = nilIfEmpty(ar.getString(rule.wordCount, from: item))
-            let cover = ar.getString(rule.coverUrl, from: item)
+            let itemContext = snapshot.forkForBook(b)
+            let itemRule = AnalyzeRule(content: item, baseUrl: baseUrl, jsLib: source.jsLib, context: itemContext)
+            // 与 Kotlin getSearchItem 一致；每个字段完成后同步值类型 Book。
+            b.name = itemRule.getString(rule.name)
+            itemContext.book = b
+            if b.name.isEmpty { continue }
+            b.author = itemRule.getString(rule.author)
+            itemContext.book = b
+            b.kind = nilIfEmpty(itemRule.getString(rule.kind))
+            itemContext.book = b
+            b.wordCount = nilIfEmpty(itemRule.getString(rule.wordCount))
+            itemContext.book = b
+            b.lastChapter = nilIfEmpty(itemRule.getString(rule.lastChapter))
+            itemContext.book = b
+            b.intro = nilIfEmpty(itemRule.getString(rule.intro))
+            itemContext.book = b
+            let cover = itemRule.getString(rule.coverUrl)
             b.coverUrl = cover.isEmpty ? nil : AnalyzeUrl.absolute(cover, base: baseUrl)
+            itemContext.book = b
+            let bookUrl = itemRule.getString(rule.bookUrl)
+            b.bookUrl = bookUrl.isEmpty ? baseUrl : AnalyzeUrl.absolute(bookUrl.components(separatedBy: "\n").first ?? bookUrl, base: baseUrl)
+            itemContext.bindBook(b)
             out.append(b)
         }
         return out
@@ -36,9 +51,9 @@ enum WebBook {
     static func bookInfo(source: BookSource, book: Book) async throws -> Book {
         var b = book
         guard let rule = source.ruleBookInfo else { return b }
-        let au = AnalyzeUrl(rawUrl: book.bookUrl, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: RuleContext(source: source, book: book), jsLib: source.jsLib)
-        let (body, url) = try await au.fetch()
         let context = RuleContext(source: source, book: b)
+        let au = AnalyzeUrl(rawUrl: book.bookUrl, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: context, jsLib: source.jsLib)
+        let (body, url) = try await au.fetch()
         let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: context)
         var root: Any? = nil
         if let i = rule.`init`, !i.isEmpty {
@@ -87,9 +102,10 @@ enum WebBook {
         if listRule.hasPrefix("-") { reverse = true; listRule.removeFirst() }
         while let u = next, !u.isEmpty, !visited.contains(u), visited.count < 30 {
             visited.insert(u)
-            let au = AnalyzeUrl(rawUrl: u, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: RuleContext(source: source, book: book), jsLib: source.jsLib)
+            let context = RuleContext(source: source, book: book)
+            let au = AnalyzeUrl(rawUrl: u, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: context, jsLib: source.jsLib)
             let (body, url) = try await au.fetch()
-            let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: RuleContext(source: source, book: book))
+            let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: context)
             let nodes = ar.getElements(listRule)
             DebugLog.add("目录列表匹配：\(nodes.count) 项（第\(visited.count)页）")
             for item in nodes {
@@ -127,17 +143,18 @@ enum WebBook {
         while let u = next, !u.isEmpty, !visited.contains(u), visited.count < 20 {
             if let nc = nextChapterUrl, u == nc, !visited.isEmpty { break }
             visited.insert(u)
-            var au = AnalyzeUrl(rawUrl: u, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: RuleContext(source: source, book: book, chapter: chapter), jsLib: source.jsLib)
+            let context = RuleContext(source: source, book: book, chapter: chapter)
+            var au = AnalyzeUrl(rawUrl: u, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: context, jsLib: source.jsLib)
             if let wj = rule.webJs, !wj.isEmpty { au.webJs = wj }
             let (body, url) = try await au.fetch()
-            let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: RuleContext(source: source, book: book))
+            let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: context)
             parts.append(ar.getString(rule.content))
             let n = ar.getString(rule.nextContentUrl).components(separatedBy: "\n").first ?? ""
             next = n.isEmpty ? nil : AnalyzeUrl.absolute(n, base: url)
         }
         var text = parts.joined(separator: "\n")
         if let rr = rule.replaceRegex, !rr.isEmpty {
-            text = AnalyzeRule(content: text, baseUrl: chapter.url, context: RuleContext(source: source, chapter: chapter)).getString(rr.hasPrefix("##") ? rr : "##" + rr, from: text)
+            text = AnalyzeRule(content: text, baseUrl: chapter.url, jsLib: source.jsLib, context: RuleContext(source: source, book: book, chapter: chapter)).getString(rr.hasPrefix("##") ? rr : "##" + rr, from: text)
         }
         return cleanText(text)
     }

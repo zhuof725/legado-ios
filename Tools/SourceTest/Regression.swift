@@ -8,6 +8,22 @@ enum RuleRegression {
             guard condition else { print("FAIL: \(name)"); exit(1) }
             checks += 1; print("PASS: \(name)")
         }
+        let variableContext = RuleContext()
+        check(JSEngine.shared.evalString("java.put('bid','123'); java.get('bid')", context: variableContext) == "123", "java.put/get 单参数变量读写")
+        check(JSEngine.shared.evalString("java.get('bid')", context: variableContext) == "123", "同一上下文跨 JS 求值保留变量")
+        check(JSEngine.shared.evalString("java.get('missing')", context: variableContext) == "", "未定义变量返回空字符串")
+        check(JSEngine.shared.evalString("java.put('https://example.invalid/key','stored'); java.get('https://example.invalid/key')", context: variableContext) == "stored", "URL 形状的单参数 get 仍然读取变量")
+        check(JSEngine.shared.evalString("java.put('local','value'); java.get('local')") == "value", "无上下文时单次求值内变量可用")
+        check(JSEngine.shared.evalString("java.get('bid')", context: RuleContext()) == "", "独立无书源上下文不串变量")
+        check(JSEngine.shared.evalString("libValue", result: "payload", baseUrl: "https://example.invalid/", vars: ["key": "测试", "page": 2], jsLib: "var libValue = [result,baseUrl,key,page].join('|');") == "payload|https://example.invalid/|测试|2", "jsLib 初始化可读取请求绑定")
+        check(AnalyzeUrl.substitute("{{'searchKey/searchPage'}}", key: "测试", page: 3) == "searchKey/searchPage", "URL 模板不改写 JS 字符串常量")
+        check(AnalyzeUrl.substitute("{{searchKey}}/{{searchPage}}", key: "测试", page: 3) == "测试/3", "URL 模板保留搜索参数兼容别名")
+        check(AnalyzeUrl.substitute("{{({searchKey: '保留字段'}).searchKey}}", key: "测试", page: 3) == "保留字段", "URL 模板不改写对象属性名")
+        check(AnalyzeUrl.evalUrlJS("/search?q={{key}}", key: "测试", page: 1, baseUrl: "https://example.invalid/") == "/search?q={{key}}", "无 JS 的 URL 保持原文等待模板替换")
+        check(AnalyzeUrl.evalUrlJS("/start<JS>result + '/next'</JS>", key: nil, page: 1, baseUrl: nil) == "/start/next", "URL JS 标签大小写不敏感")
+        check(AnalyzeUrl.evalUrlJS("/start<js>result + '/middle'</js>@result/end", key: nil, page: 1, baseUrl: nil) == "/start/middle/end", "URL 后续字面量通过 @result 保留前段结果")
+        check(AnalyzeUrl.evalUrlJS("/a<js>result + '/b'</js>@result/c<js>result + '/d'</js>", key: nil, page: 1, baseUrl: nil) == "/a/b/c/d", "多个 URL 脚本与字面量按出现顺序执行")
+        check(AnalyzeUrl.evalUrlJS("@JS:key + '/' + page", key: "测试", page: 3, baseUrl: nil) == "测试/3", "URL @JS 前缀与请求参数绑定")
         let fixtures = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent("Tools/SourceTest/Fixtures")
         func source(_ file: String) throws -> BookSource {
@@ -30,6 +46,45 @@ enum RuleRegression {
             check(sa.getString(star.ruleToc?.chapterUrl, from: item) == "/book/9197/abc.html", "星星章节地址")
         }
         let dj = try source("dj-source.json")
+        var scopeA = dj
+        var scopeB = dj
+        let scopeBase = "https://scope.example.invalid/" + UUID().uuidString
+        scopeA.bookSourceUrl = scopeBase + "#A"
+        scopeB.bookSourceUrl = scopeBase + "#B"
+        _ = RuleContext.sourcePut(scopeA.bookSourceUrl, "sourceOnly", "A")
+        check(RuleContext.sourceGet(scopeB.bookSourceUrl, "sourceOnly") == "", "同站不同后缀书源的静态存储隔离")
+        check(RuleContext(source: scopeA).get("sourceOnly") == "A", "来源静态存储与上下文读取一致")
+        let sourceContext = RuleContext(source: scopeA)
+        _ = sourceContext.put("shared", "source")
+        check(RuleContext(source: scopeA).get("shared") == "source", "同一书源跨上下文保留来源变量")
+        check(RuleContext(source: scopeB).get("shared") == "", "来源变量不泄漏到同站另一书源")
+        let scopeBook = Book(bookUrl: scopeBase + "/book/1", name: "作用域测试", origin: scopeA.bookSourceUrl)
+        let otherBook = Book(bookUrl: scopeBase + "/book/2", name: "另一书籍", origin: scopeA.bookSourceUrl)
+        let bookContext = RuleContext(source: scopeA, book: scopeBook)
+        _ = bookContext.put("shared", "book")
+        check(RuleContext(source: scopeA, book: scopeBook).get("shared") == "book", "书籍变量跨上下文保留并覆盖来源值")
+        check(RuleContext(source: scopeA, book: otherBook).get("shared") == "source", "不同书籍不共享书籍变量")
+        let scopeChapter = BookChapter(url: scopeBase + "/chapter/1", title: "第一章", index: 0)
+        let otherChapter = BookChapter(url: scopeBase + "/chapter/2", title: "第二章", index: 1)
+        let chapterContext = RuleContext(source: scopeA, book: scopeBook, chapter: scopeChapter)
+        _ = chapterContext.put("shared", "chapter")
+        check(RuleContext(source: scopeA, book: scopeBook, chapter: scopeChapter).get("shared") == "chapter", "章节变量跨上下文保留并优先于书籍值")
+        check(RuleContext(source: scopeA, book: scopeBook, chapter: otherChapter).get("shared") == "book", "不同章节回退书籍变量而不串值")
+        check(chapterContext.get("bookName") == "作用域测试" && chapterContext.get("title") == "第一章", "保留书名与章节标题特殊变量")
+        let secondChapterContext = RuleContext(source: scopeA, book: scopeBook, chapter: scopeChapter)
+        _ = secondChapterContext.put("shared", "updated")
+        check(chapterContext.get("shared") == "updated", "已有上下文可见其他上下文更新而不返回旧缓存")
+        _ = secondChapterContext.put("shared", "")
+        check(chapterContext.get("shared") == "book", "章节变量为空时回退书籍变量")
+        _ = RuleContext(source: scopeA, book: scopeBook).put("shared", "")
+        check(bookContext.get("shared") == "source", "书籍变量为空时回退来源变量")
+        let switchedContext = RuleContext(source: scopeA, book: scopeBook)
+        _ = switchedContext.put("onlyThisBook", "private")
+        switchedContext.book = otherBook
+        check(switchedContext.get("onlyThisBook") == "", "切换书籍后不残留前一本的实例变量")
+        var sameURLDifferentSource = scopeBook
+        sameURLDifferentSource.origin = scopeB.bookSourceUrl
+        check(RuleContext(source: scopeB, book: sameURLDifferentSource).get("onlyThisBook") == "", "相同书籍 URL 在不同书源下仍然隔离")
         let context = RuleContext(source: dj)
         let searchJSON = """
         {"code":0,"body":{"books":[{"bookId":12385810,"bookName":"测试书籍","url":"/book/12385810","author":"测试作者","desc":"测试简介"}]}}
@@ -66,6 +121,9 @@ enum RuleRegression {
         check(xyBooks.count == 1 && xyBooks[0].name == "测试书籍", "小原混淆 class 不影响 .item + dt a@text")
         let request = AnalyzeUrl(rawUrl: xy.searchUrl!, key: "测试书籍", baseUrl: xy.bookSourceUrl)
         check(request.method == "POST" && request.body == "searchkey=测试书籍", "小原 POST options 与关键词替换")
+        ParserRegression.run(check)
+        JSBridgeRegression.run(check)
+        BookContextRegression.run(check)
         print("REGRESSION PASS: \(checks) 项固定断言；不声称真机网络/WebView 已验证。")
     }
 }

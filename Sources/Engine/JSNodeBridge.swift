@@ -32,6 +32,17 @@ import SwiftSoup
     let element: Element
     init(_ element: Element) { self.element = element; super.init() }
 
+    /// Restore native nodes at the JS/AnalyzeRule boundary, including node arrays.
+    static func unwrap(_ value: Any) -> Any {
+        if let node = value as? JSNodeBridge { return node.element }
+        if let list = value as? JSNodeListBridge { return list.elements }
+        if let array = value as? [Any] { return array.map { unwrap($0) } }
+        if let object = value as? [String: Any] {
+            return object.mapValues { unwrap($0) }
+        }
+        return value
+    }
+
     func attr(_ name: String) -> String { (try? element.attr(name)) ?? "" }
     func text() -> String { (try? element.text()) ?? "" }
     func ownText() -> String { element.ownText() }

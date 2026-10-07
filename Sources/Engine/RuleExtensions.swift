@@ -52,11 +52,30 @@ extension AnalyzeRule {
             let t = item.trimmingCharacters(in: .whitespaces)
             if t.contains(":") {
                 let p = t.split(separator: ":", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
-                let start = norm(Int(p[0]) ?? 0)
-                let end = norm(p.count > 1 ? (Int(p[1]) ?? -1) : -1)
-                let step = max(abs(p.count > 2 ? (Int(p[2]) ?? 1) : 1), 1)
-                if start <= end { idxs += Array(stride(from: start, through: end, by: step)) }
-                else { idxs += Array(stride(from: start, through: end, by: -step)) }
+                guard (2...3).contains(p.count),
+                      p.allSatisfy({ $0.isEmpty || Int($0) != nil }) else { return [] }
+                var start = norm(Int(p[0]) ?? 0)
+                var end = norm(Int(p[1]) ?? -1)
+                let rawStep = p.count == 3 ? (Int(p[2]) ?? 1) : 1
+                // Match Kotlin ElementsSingle: reject same-side out-of-range bounds,
+                // then clamp endpoints before expanding an inclusive range.
+                if (start < 0 && end < 0) || (start >= n && end >= n) { continue }
+                start = min(n - 1, max(0, start))
+                end = min(n - 1, max(0, end))
+                if start == end || rawStep >= n {
+                    idxs.append(start)
+                    continue
+                }
+                // Negative CSS steps are relative to list length; avoid negating Int.min.
+                let step = rawStep > 0 ? rawStep : (rawStep > -n ? rawStep + n : 1)
+                let ascending = start <= end
+                var index = start
+                while true {
+                    idxs.append(index)
+                    let remaining = ascending ? end - index : index - end
+                    if step > remaining { break }
+                    index += ascending ? step : -step
+                }
             } else if let i = Int(t) {
                 idxs.append(norm(i))
             }
@@ -65,7 +84,11 @@ extension AnalyzeRule {
             let ex = Set(idxs)
             return list.enumerated().filter { !ex.contains($0.offset) }.map { $0.element }
         }
-        return idxs.compactMap { ($0 >= 0 && $0 < n) ? list[$0] : nil }
+        var seen = Set<Int>()
+        return idxs.compactMap { index in
+            guard index >= 0, index < n, seen.insert(index).inserted else { return nil }
+            return list[index]
+        }
     }
 
     /// 拆出 "tag.a[-1:0]" → ("tag.a", "-1:0")

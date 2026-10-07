@@ -72,30 +72,34 @@ struct AnalyzeUrl {
 
     /// 执行 URL 规则里的 @js: 和 <js></js>，返回最终的 URL 字符串
     static func evalUrlJS(_ raw: String, key: String?, page: Int, baseUrl: String?, context: RuleContext? = nil, jsLib: String? = nil) -> String {
-        guard raw.contains("<js>") || raw.range(of: "@js:", options: .caseInsensitive) != nil else { return raw }
-        var result = ""
-        var rest = raw
+        // 与 Kotlin AppPattern.JS_PATTERN 一致：按出现顺序处理，大小写不敏感。
+        guard let re = try? NSRegularExpression(
+            pattern: "<js>([\\s\\S]*?)</js>|@js:([\\s\\S]*)",
+            options: [.caseInsensitive]
+        ) else { return raw }
+        let text = raw as NSString
+        let matches = re.matches(in: raw, range: NSRange(location: 0, length: text.length))
+        guard !matches.isEmpty else { return raw }
+        var result = raw
+        var start = 0
         let vars: [String: Any] = ["key": key ?? "", "page": page, "searchKey": key ?? "", "searchPage": page]
-        func run(_ js: String) {
-            let v = JSEngine.shared.eval(js, result: result, baseUrl: baseUrl ?? "", vars: vars, jsLib: jsLib, context: context)
-            result = v.map { AnalyzeRule.asString($0) } ?? ""
+        func applyLiteral(_ literal: String) {
+            let value = literal.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty {
+                result = value.replacingOccurrences(of: "@result", with: result)
+            }
         }
-        while let r = rest.range(of: "<js>") {
-            let before = String(rest[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !before.isEmpty { result = before }
-            let after = rest[r.upperBound...]
-            if let e = after.range(of: "</js>") {
-                run(String(after[..<e.lowerBound])); rest = String(after[e.upperBound...])
-            } else { run(String(after)); rest = "" }
+        for match in matches {
+            if match.range.location > start {
+                applyLiteral(text.substring(with: NSRange(location: start, length: match.range.location - start)))
+            }
+            let scriptRange = match.range(at: 2).location != NSNotFound ? match.range(at: 2) : match.range(at: 1)
+            let value = JSEngine.shared.eval(text.substring(with: scriptRange), result: result,
+                baseUrl: baseUrl ?? "", vars: vars, jsLib: jsLib, context: context)
+            result = value.map { AnalyzeRule.asString($0) } ?? ""
+            start = NSMaxRange(match.range)
         }
-        if let r = rest.range(of: "@js:", options: .caseInsensitive) {
-            let before = String(rest[..<r.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !before.isEmpty { result = before }
-            run(String(rest[r.upperBound...]))
-        } else {
-            let t = rest.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !t.isEmpty { result = t }
-        }
+        if start < text.length { applyLiteral(text.substring(from: start)) }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -107,8 +111,7 @@ struct AnalyzeUrl {
         // Legado 先计算每个 {{js}}，再处理 page 标记，避免先替换 key 破坏 JS。
         for match in re.matches(in: s, range: NSRange(location: 0, length: original.length)).reversed() {
             let expr = original.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-            let js = expr.replacingOccurrences(of: "searchKey", with: "key")
-                .replacingOccurrences(of: "searchPage", with: "page")
+            let js = expr
             let value: String
             if js == "key" { value = k }
             else if js == "page" { value = "\(page)" }
@@ -117,7 +120,7 @@ struct AnalyzeUrl {
                 value = AnalyzeUrl.cleanSourceUrl(context?.source?.bookSourceUrl ?? "")
             }
             else if js.hasPrefix("@get:") { value = context?.get(String(js.dropFirst(5))) ?? "" }
-            else { value = JSEngine.shared.evalString(js, vars: ["key": k, "page": page], jsLib: jsLib, context: context) ?? "" }
+            else { value = JSEngine.shared.evalString(js, vars: ["key": k, "page": page, "searchKey": k, "searchPage": page], jsLib: jsLib, context: context) ?? "" }
             result = (result as NSString).replacingCharacters(in: match.range, with: value)
         }
         return result.replacingOccurrences(of: "{key}", with: k)
