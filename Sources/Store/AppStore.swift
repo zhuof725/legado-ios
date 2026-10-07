@@ -146,6 +146,7 @@ final class ReadSettings: ObservableObject {
     @AppStorage("lineSpacing") var lineSpacing: Double = 8
     @AppStorage("theme") var theme: Int = 0
     @AppStorage("pageMode") var pageMode: Int = 0 // 0 滚动 1 翻页
+    @AppStorage("pageTurnStyle") var pageTurnStyle: Int = 0 // 0 滑动 1 卷页 2 淡入淡出
 
     static let themes: [(bg: Color, fg: Color, name: String)] = [
         (Color(red: 0.98, green: 0.96, blue: 0.90), Color(red: 0.2, green: 0.2, blue: 0.2), "米黄"),

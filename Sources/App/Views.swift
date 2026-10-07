@@ -143,6 +143,11 @@ struct ReaderView: View {
     @State private var commentURL: URL?
     @State private var commentBusy = false
     @State private var restorePermille: Int?
+    @State private var pages: [BookPage] = []
+    @State private var pageIndex = 0
+    @State private var screenSize: CGSize = .zero
+    @State private var pendingEdge: Int?
+    @State private var pendingLastPage = false
     @State private var contentHeight: CGFloat = 0
     @State private var viewportHeight: CGFloat = 0
     @Environment(\.scenePhase) private var scenePhase
@@ -159,75 +164,83 @@ struct ReaderView: View {
     var body: some View {
         ZStack {
             theme.bg.ignoresSafeArea()
+            GeometryReader { geo in
+                Color.clear.onAppear { screenSize = geo.size }
+                    .onChange(of: geo.size) { screenSize = $0 }
+            }
+            if settings.pageMode == 1 {
+                pagedBody
+            } else {
             ScrollViewReader { proxy in
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Color.clear.frame(height: 1).id("top")
-                            .background(GeometryReader { g in
-                                Color.clear.preference(key: ScrollOffsetKey.self, value: -g.frame(in: .named("reader")).minY)
-                            })
-                        if !chapters.isEmpty, index < chapters.count {
-                            Text(chapters[index].title).font(.title3.bold())
-                        }
-                        if loading { ProgressView().frame(maxWidth: .infinity) }
-                        if let e = error { Text(e).foregroundStyle(.red) }
-                        if blocks.isEmpty {
-                            Text(text)
-                                .font(.system(size: settings.fontSize))
-                                .lineSpacing(settings.lineSpacing)
-                                .textSelection(.enabled)
-                        } else {
-                            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                                blockView(block)
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Color.clear.frame(height: 1).id("top")
+                                .background(GeometryReader { g in
+                                    Color.clear.preference(key: ScrollOffsetKey.self, value: -g.frame(in: .named("reader")).minY)
+                                })
+                            if !chapters.isEmpty, index < chapters.count {
+                                Text(chapters[index].title).font(.title3.bold())
                             }
-                        }
-                        if !chapters.isEmpty {
-                            HStack {
-                                Button("上一章") { go(index - 1) }.disabled(index <= 0)
-                                Spacer()
-                                Button("下一章") { go(index + 1) }.disabled(index >= chapters.count - 1)
-                            }
-                            .padding(.vertical, 24)
-                        }
-                    }
-                    .foregroundStyle(theme.fg)
-                    .padding(.horizontal, 20)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(GeometryReader { g in
-                        Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
-                    })
-                    // 等间距透明锚点：位置恢复时按比例选一个滚过去。锚点只占背景，不影响排版。
-                    .background(alignment: .top) {
-                        GeometryReader { g in
-                            let scrollable = max(g.size.height - viewportHeight, 0)
-                            ZStack(alignment: .top) {
-                                ForEach(0...100, id: \.self) { i in
-                                    Color.clear.frame(width: 1, height: 1)
-                                        .offset(y: scrollable * CGFloat(i) / 100)
-                                        .id("slot-\(i)")
+                            if loading { ProgressView().frame(maxWidth: .infinity) }
+                            if let e = error { Text(e).foregroundStyle(.red) }
+                            if blocks.isEmpty {
+                                Text(text)
+                                    .font(.system(size: settings.fontSize))
+                                    .lineSpacing(settings.lineSpacing)
+                                    .textSelection(.enabled)
+                            } else {
+                                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                                    blockView(block)
                                 }
                             }
-                            .frame(maxWidth: .infinity, alignment: .top)
+                            if !chapters.isEmpty {
+                                HStack {
+                                    Button("上一章") { go(index - 1) }.disabled(index <= 0)
+                                    Spacer()
+                                    Button("下一章") { go(index + 1) }.disabled(index >= chapters.count - 1)
+                                }
+                                .padding(.vertical, 24)
+                            }
+                        }
+                        .foregroundStyle(theme.fg)
+                        .padding(.horizontal, 20)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
+                        })
+                        // 等间距透明锚点：位置恢复时按比例选一个滚过去。锚点只占背景，不影响排版。
+                        .background(alignment: .top) {
+                            GeometryReader { g in
+                                let scrollable = max(g.size.height - viewportHeight, 0)
+                                ZStack(alignment: .top) {
+                                    ForEach(0...100, id: \.self) { i in
+                                        Color.clear.frame(width: 1, height: 1)
+                                            .offset(y: scrollable * CGFloat(i) / 100)
+                                            .id("slot-\(i)")
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .top)
+                            }
                         }
                     }
+                    .coordinateSpace(name: "reader")
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: ViewportHeightKey.self, value: g.size.height)
+                    })
+                    .onPreferenceChange(ContentHeightKey.self) { h in
+                        contentHeight = h
+                        applyRestoreIfReady(proxy: proxy)
+                    }
+                    .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
+                    .onPreferenceChange(ScrollOffsetKey.self) { offset in recordScroll(offset) }
+                    .onChange(of: index) { _ in
+                        restorePermille = nil
+                        proxy.scrollTo("top", anchor: .top)
+                    }
+                    .onChange(of: loading) { _ in applyRestoreIfReady(proxy: proxy) }
                 }
-                .coordinateSpace(name: "reader")
-                .background(GeometryReader { g in
-                    Color.clear.preference(key: ViewportHeightKey.self, value: g.size.height)
-                })
-                .onPreferenceChange(ContentHeightKey.self) { h in
-                    contentHeight = h
-                    applyRestoreIfReady(proxy: proxy)
-                }
-                .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
-                .onPreferenceChange(ScrollOffsetKey.self) { offset in recordScroll(offset) }
-                .onChange(of: index) { _ in
-                    restorePermille = nil
-                    proxy.scrollTo("top", anchor: .top)
-                }
-                .onChange(of: loading) { _ in applyRestoreIfReady(proxy: proxy) }
+                .onTapGesture { withAnimation { showBars.toggle() } }
             }
-            .onTapGesture { withAnimation { showBars.toggle() } }
         }
         .navigationTitle(showBars ? book.name : "")
         .navigationBarTitleDisplayMode(.inline)
@@ -274,6 +287,19 @@ struct ReaderView: View {
         .sheet(isPresented: $showSettings) {
             NavigationStack {
                 Form {
+                    Section("阅读方式") {
+                        Picker("方式", selection: $settings.pageMode) {
+                            Text("滚动").tag(0)
+                            Text("翻页").tag(1)
+                        }
+                        .pickerStyle(.segmented)
+                        if settings.pageMode == 1 {
+                            Picker("翻页动画", selection: $settings.pageTurnStyle) {
+                                ForEach(PageTurnStyle.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
+                            }
+                            .pickerStyle(.segmented)
+                        }
+                    }
                     Section("字号 \(Int(settings.fontSize))") { Slider(value: $settings.fontSize, in: 12...32, step: 1) }
                     Section("行距 \(Int(settings.lineSpacing))") { Slider(value: $settings.lineSpacing, in: 0...24, step: 1) }
                     Section("背景") {
@@ -290,6 +316,10 @@ struct ReaderView: View {
         }
         .sheet(item: $commentURL) { link in CommentSheet(url: link) }
         .onChange(of: scenePhase) { phase in if phase != .active { store.flushProgress() } }
+        .onChange(of: settings.fontSize) { _ in repaginate() }
+        .onChange(of: settings.lineSpacing) { _ in repaginate() }
+        .onChange(of: settings.pageMode) { _ in repaginate() }
+        .onChange(of: screenSize) { _ in repaginate() }
         .onDisappear { store.flushProgress() }
         .task { await start() }
     }
@@ -335,6 +365,68 @@ struct ReaderView: View {
         DispatchQueue.main.async {
             withAnimation(nil) { proxy.scrollTo("slot-\(slot)", anchor: .top) }
         }
+    }
+
+    // MARK: 翻页模式
+
+    private var turnStyle: PageTurnStyle { PageTurnStyle(rawValue: settings.pageTurnStyle) ?? .slide }
+
+    /// 重新分页：字号、行距、屏幕尺寸或内容变化时调用，并回到同一个字符位置。
+    private func repaginate(keepOffset: Int? = nil) {
+        guard settings.pageMode == 1, screenSize.width > 0 else { return }
+        let source: [ContentBlock] = blocks.isEmpty ? Paginator.blocks(fromPlain: text) : blocks
+        guard !source.isEmpty else { pages = []; return }
+        let offset = keepOffset ?? (pages.indices.contains(pageIndex) ? pages[pageIndex].startOffset : 0)
+        let layout = Paginator.layout(width: screenSize.width, height: screenSize.height,
+                                      fontSize: settings.fontSize, lineSpacing: settings.lineSpacing)
+        pages = Paginator.paginate(source, layout: layout)
+        pageIndex = Paginator.pageIndex(containing: offset, in: pages)
+    }
+
+    @ViewBuilder
+    private var pagedBody: some View {
+        if pages.isEmpty {
+            VStack { if loading { ProgressView() } else if let e = error { Text(e).foregroundStyle(.red) } else { Text("") } }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onTapGesture { withAnimation { showBars.toggle() } }
+        } else {
+            PageTurnView(
+                pages: pages.enumerated().map { i, pg in
+                    AnyView(PageContentView(page: pg, fontSize: settings.fontSize, lineSpacing: settings.lineSpacing,
+                                            fg: theme.fg, bg: theme.bg,
+                                            title: index < chapters.count ? chapters[index].title : "",
+                                            pageNumber: i + 1, pageCount: pages.count,
+                                            onTapComment: { openComment($0) }))
+                },
+                current: $pageIndex,
+                style: turnStyle,
+                background: UIColor(theme.bg),
+                onEdge: { dir in
+                    // 翻过章首/章末：切到上一章末页或下一章首页。
+                    DispatchQueue.main.async { goAcrossEdge(dir) }
+                },
+                onTapCenter: { withAnimation { showBars.toggle() } })
+            .id("\(settings.pageTurnStyle)-\(pages.count)-\(index)-\(Int(settings.fontSize))-\(Int(settings.lineSpacing))-\(settings.theme)")
+            .ignoresSafeArea(edges: .bottom)
+            .onChange(of: pageIndex) { i in recordPage(i) }
+        }
+    }
+
+    /// 翻页模式的位置 = 当前页第一个字的字符偏移；换算成千分比存进已有的 durChapterPos，滚动模式也能读。
+    private func recordPage(_ i: Int) {
+        guard pages.indices.contains(i), let last = pages.last else { return }
+        let total = max(last.startOffset + 1, 1)
+        store.updateScrollPosition(book, permille: Int(Double(pages[i].startOffset) / Double(total) * 1000))
+    }
+
+    private func goAcrossEdge(_ dir: Int) {
+        guard pendingEdge == nil else { return }
+        let target = index + dir
+        guard chapters.indices.contains(target) else { return }
+        pendingEdge = dir
+        pendingLastPage = dir < 0
+        go(target)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { pendingEdge = nil }
     }
 
     /// 点击评论：网址直接弹评论页；`js:` 开头是书源函数调用，先在后台执行拿到网址。
@@ -441,6 +533,14 @@ struct ReaderView: View {
         let hasRich = parsed.contains { if case .paragraph(_, let c, _) = $0 { return c > 0 }; if case .paragraph = $0 { return false }; return true }
         if hasRich { blocks = parsed; text = "" }
         else { blocks = []; text = WebBook.cleanText(raw) }
+        // 翻页模式：按保存的位置（千分比）或上/下一章边界决定落在哪一页。
+        let permille = restorePermille ?? 0
+        repaginate(keepOffset: 0)
+        if settings.pageMode == 1, !pages.isEmpty {
+            if pendingLastPage { pageIndex = pages.count - 1; pendingLastPage = false }
+            else if permille > 0, let last = pages.last { pageIndex = Paginator.pageIndex(containing: Int(Double(last.startOffset + 1) * Double(permille) / 1000), in: pages); restorePermille = nil }
+            else { pageIndex = 0 }
+        }
     }
 
     private func prefetch(_ s: BookSource) {
