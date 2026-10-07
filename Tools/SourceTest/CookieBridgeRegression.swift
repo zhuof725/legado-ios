@@ -1,29 +1,30 @@
 import Foundation
 
-/// Synthetic, instance-local URLProtocol fixtures. Never uses the shared cookie jar.
+/// Private storage fixtures plus real HTTP loopback wire verification.
+/// No shared cookie jar, external server, HTTPS or redirect verification.
 enum CookieBridgeRegression {
+    // Storage-only fixtures must never accidentally reach the network.
+    // A custom URLProtocol's request is not guaranteed to represent Foundation's
+    // final HTTP Cookie serialization. Observe wire bytes instead; never fill
+    // a Cookie header from storage inside this test protocol.
     private final class Transport: URLProtocol {
         override class func canInit(with request: URLRequest) -> Bool { true }
         override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
         override func startLoading() {
-            guard let url = request.url, url.host?.hasSuffix(".invalid") == true else {
-                client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
-                return
-            }
-            // Return only a Boolean outcome, never echo cookie contents into logs.
-            let raw = request.value(forHTTPHeaderField: "Cookie") ?? ""
-            let fields = (try? SourceCookieStore.cookieToMap(raw)) ?? [:]
-            let matched = fields["transport"] == "fixture"
-            let response = HTTPURLResponse(url: url, statusCode: 200,
-                httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/plain"])!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: Data((matched ? "matched" : "absent").utf8))
-            client?.urlProtocolDidFinishLoading(self)
+            client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
         }
         override func stopLoading() {}
     }
 
     static func run(_ check: (Bool, String) -> Void) async throws {
+        // The caller's check may exit(1). Report only AFTER fixture defers have
+        // closed the listener/connections and invalidated all private sessions.
+        var results: [(Bool, String)] = []
+        try await runFixtures { results.append(($0, $1)) }
+        for (passed, label) in results { check(passed, label) }
+    }
+
+    private static func runFixtures(_ check: (Bool, String) -> Void) async throws {
         func configuration() -> URLSessionConfiguration {
             let config = URLSessionConfiguration.ephemeral
             config.protocolClasses = [Transport.self]
@@ -120,16 +121,125 @@ enum CookieBridgeRegression {
         check(run("cookie.getKey(cookieURL,'first')", engineA) == "three",
               "missing-storage operations do not mutate another session")
 
-        check(run("cookie.setCookie(cookieURL,'transport=fixture'); java.connect(cookieURL+'/echo').body()", engineA) == "matched",
-              "JS Cookie write reaches the injected URLSession request through production HTTP bridge")
-        check(run("java.connect(cookieURL+'/echo').body()", engineB) == "absent",
-              "another session sends no Cookie from the first session")
         check(run("""
             cookie.setCookie(otherURL,'other=kept');
             cookie.removeCookie(cookieURL);
             cookie.getCookie(cookieURL)==='' && cookie.getKey(otherURL,'other')==='kept';
             """, engineA) == "true", "Cookie removal preserves another host")
-        check(run("java.connect(cookieURL+'/echo').body()", engineA) == "absent",
-              "removed Cookie no longer accompanies the session request")
+        try await runLoopback(check)
+    }
+
+    private static func runLoopback(_ check: (Bool, String) -> Void) async throws {
+        func configuration() -> URLSessionConfiguration {
+            let config = URLSessionConfiguration.ephemeral
+            // Use Foundation's HTTP transport, not a custom URLProtocol.
+            config.protocolClasses = []
+            config.connectionProxyDictionary = [:]
+            config.urlCache = nil
+            config.requestCachePolicy = .reloadIgnoringLocalCacheData
+            config.httpCookieAcceptPolicy = .always
+            config.httpShouldSetCookies = true
+            config.timeoutIntervalForRequest = 5
+            config.timeoutIntervalForResource = 6
+            config.waitsForConnectivity = false
+            return config
+        }
+        let configA = configuration()
+        let configB = configuration()
+        guard let jarA = configA.httpCookieStorage,
+              let jarB = configB.httpCookieStorage, jarA !== jarB else {
+            check(false, "loopback stage=setup error=PrivateStorageUnavailable")
+            return
+        }
+        let sessionA = URLSession(configuration: configA)
+        let sessionB = URLSession(configuration: configB)
+        let server = CookieLoopbackServer()
+        defer {
+            server.stop()
+            sessionA.invalidateAndCancel()
+            sessionB.invalidateAndCancel()
+            // Both jars belong exclusively to this fixture.
+            for jar in [jarA, jarB] {
+                for cookie in jar.cookies ?? [] { jar.deleteCookie(cookie) }
+            }
+        }
+        try await withTaskCancellationHandler(operation: {
+            try Task.checkCancellation()
+            let root: String
+            do {
+                root = try server.start()
+            } catch let failure as CookieLoopbackServer.Failure {
+                try Task.checkCancellation()
+                check(false, "loopback stage=start error=\(failure.rawValue)")
+                return
+            } catch {
+                try Task.checkCancellation()
+                check(false, "loopback stage=start error=UnexpectedServerError")
+                return
+            }
+            try Task.checkCancellation()
+            let engineA = JSEngine(session: sessionA, responseTimeout: 7)
+            let engineB = JSEngine(session: sessionB, responseTimeout: 7)
+
+            func evaluate(_ script: String, _ engine: JSEngine) -> String {
+                // Catch inside JS; never report exception messages, raw headers,
+                // native descriptions or arbitrary response bodies.
+                engine.evalString("""
+                    (function(){try { \(script) }
+                    catch(e){
+                        if(e.name==='CookieError') return 'CookieError';
+                        if(e.name==='TimeoutError') return 'TimeoutError';
+                        if(e.name==='NetworkError') return 'NetworkError';
+                        return 'JavaScriptError';
+                    }})();
+                    """, vars: ["cookieURL": root]) ?? "EvaluationError"
+            }
+            func errorCategory(_ result: String) -> String {
+                switch result {
+                case "matched", "absent": return "none"
+                case "CookieError", "TimeoutError", "NetworkError",
+                     "JavaScriptError", "EvaluationError": return result
+                default: return "UnexpectedResponse"
+                }
+            }
+            func observe(_ phase: String, _ expected: Bool,
+                         _ result: String, _ label: String) {
+                let wire = server.received(phase)
+                let bodyMatches = result == (expected ? "matched" : "absent")
+                let failure = server.failure
+                // Missing wire evidence is a failure, not an absent cookie.
+                let passed = wire == expected && bodyMatches && failure == nil
+                let category = failure?.rawValue ?? errorCategory(result)
+                check(passed, "\(label); stage=\(phase) observed=\(wire != nil) matched=\(wire == true) responseOK=\(bodyMatches) error=\(category)")
+            }
+
+            // HTTP origin creates a non-Secure cookie through production JS.
+            // Never set a native Cookie header or copy cookies between jars.
+            let written = evaluate("""
+                cookie.setCookie(cookieURL,'transport=fixture');
+                return java.connect(cookieURL+'/write').body();
+                """, engineA)
+            try Task.checkCancellation()
+            observe("/write", true, written,
+                    "JS Cookie write reaches the injected URLSession request through production HTTP bridge")
+
+            let isolated = evaluate("return java.connect(cookieURL+'/isolated').body();", engineB)
+            try Task.checkCancellation()
+            observe("/isolated", false, isolated,
+                    "another session sends no Cookie from the first session")
+
+            let removed = evaluate("""
+                cookie.removeCookie(cookieURL);
+                return java.connect(cookieURL+'/removed').body();
+                """, engineA)
+            try Task.checkCancellation()
+            observe("/removed", false, removed,
+                    "removed Cookie no longer accompanies the session request")
+        }, onCancel: {
+            // Independent of the thread blocked by the synchronous JS bridge.
+            sessionA.invalidateAndCancel()
+            sessionB.invalidateAndCancel()
+            server.stop()
+        })
     }
 }
