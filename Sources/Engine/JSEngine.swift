@@ -220,6 +220,18 @@ final class JSEngine {
         self.responseTimeout = responseTimeout
     }
 
+    /// 登录信息仅存内存（重启丢失），按书源完整标识隔离。
+    static let loginStore = SourceLoginStore(
+        backing: InMemorySourceLoginBackingStore(),
+        cookieReplacer: { key, cookie in
+            let url = key.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? key
+            try SourceCookieStore(storage: HTTPCookieStorage.shared).replaceCookie(url, cookie)
+        },
+        cookieRemover: { key in
+            let url = key.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? key
+            try SourceCookieStore(storage: HTTPCookieStorage.shared).removeCookie(url)
+        })
+
     /// 当前正在执行的书源（供 JS 里的 `source` 对象使用）
     static var currentSource: BookSource?
 
@@ -251,7 +263,15 @@ final class JSEngine {
         }
     };
     var cache={get:function(k){return java.storeGet(k)},put:function(k,v){return java.storePut(k,String(v))},getFromMemory:function(k){return java.storeGet(k)},putMemory:function(k,v){return java.storePut(k,String(v))}};
-    var source={bookSourceUrl:'',bookSourceName:'',bookSourceComment:'',getKey:function(){return this.bookSourceUrl},getVariable:function(){return java.storeGet('__var_'+this.bookSourceUrl)},setVariable:function(v){java.storePut('__var_'+this.bookSourceUrl,String(v))},put:function(k,v){return java.storePut(k,String(v))},get:function(k){return java.storeGet(k)}};
+    var source={bookSourceUrl:'',bookSourceName:'',bookSourceComment:'',getKey:function(){return this.bookSourceUrl},getVariable:function(){return java.storeGet('__var_'+this.bookSourceUrl)},setVariable:function(v){java.storePut('__var_'+this.bookSourceUrl,String(v))},put:function(k,v){return java.storePut(k,String(v))},get:function(k){return java.storeGet(k)},
+        getLoginInfoMap:function(){var s=String(__loginInfoMap());var m=Object.create(null);try{var o=JSON.parse(s);Object.keys(o).forEach(function(k){m[k]=o[k];});}catch(e){}return m;},
+        getLoginInfo:function(){var v=__loginGet();return v==null||v===''?null:String(v);},
+        putLoginInfo:function(v){return __loginPut(String(v));},
+        removeLoginInfo:function(){__loginRemove();},
+        getLoginHeader:function(){var v=__loginHeaderGet();return v==null||v===''?null:String(v);},
+        getLoginHeaderMap:function(){var v=__loginHeaderGet();if(v==null||v==='')return null;var m=Object.create(null);try{var o=JSON.parse(String(v));Object.keys(o).forEach(function(k){m[k]=o[k];});}catch(e){return null;}return m;},
+        putLoginHeader:function(v){__loginHeaderPut(String(v));},
+        removeLoginHeader:function(){__loginHeaderRemove();}};
     var book={name:'',author:'',bookUrl:'',tocUrl:'',getVariable:function(){return ''},setVariable:function(){}};
     var chapter={title:'',url:'',index:0};
     var Packages={org:{jsoup:{Jsoup:{parse:function(html){return __jsoupParse(String(html));}}}}};
@@ -389,9 +409,47 @@ final class JSEngine {
         ctx.setObject(fromMap, forKeyedSubscript: "__cookieFromMap" as NSString)
     }
 
+    /// Login values never go to logs or exception text.
+    private func installLoginBindings(_ ctx: JSContext, source: BookSource?) {
+        let store = JSEngine.loginStore
+        let key = source?.bookSourceUrl ?? ""
+        let ui = source?.loginUi
+        let usable = !key.isEmpty
+        func fail(_ message: String) {
+            guard let current = JSContext.current() else { return }
+            current.exception = JSValue(newErrorFromMessage: message, in: current)
+        }
+        let map: @convention(block) () -> String = {
+            guard usable else { return "{}" }
+            let m = store.getLoginInfoMap(key, loginUiJSON: ui)
+            guard let d = try? JSONSerialization.data(withJSONObject: m, options: [.sortedKeys]) else { return "{}" }
+            return String(data: d, encoding: .utf8) ?? "{}"
+        }
+        let get: @convention(block) () -> String = { usable ? (store.getLoginInfo(key) ?? "") : "" }
+        let put: @convention(block) (String) -> Bool = { usable ? store.putLoginInfo(key, $0) : false }
+        let remove: @convention(block) () -> Void = { if usable { store.removeLoginInfo(key) } }
+        let hGet: @convention(block) () -> String = { usable ? (store.getLoginHeader(key) ?? "") : "" }
+        let hPut: @convention(block) (String) -> Void = { v in
+            guard usable else { return }
+            do { try store.putLoginHeader(key, v) } catch { fail("Login header update failed") }
+        }
+        let hRemove: @convention(block) () -> Void = {
+            guard usable else { return }
+            do { try store.removeLoginHeader(key) } catch { fail("Login header removal failed") }
+        }
+        ctx.setObject(map, forKeyedSubscript: "__loginInfoMap" as NSString)
+        ctx.setObject(get, forKeyedSubscript: "__loginGet" as NSString)
+        ctx.setObject(put, forKeyedSubscript: "__loginPut" as NSString)
+        ctx.setObject(remove, forKeyedSubscript: "__loginRemove" as NSString)
+        ctx.setObject(hGet, forKeyedSubscript: "__loginHeaderGet" as NSString)
+        ctx.setObject(hPut, forKeyedSubscript: "__loginHeaderPut" as NSString)
+        ctx.setObject(hRemove, forKeyedSubscript: "__loginHeaderRemove" as NSString)
+    }
+
     private func makeContext(_ context: RuleContext? = nil) -> JSContext {
         let ctx = JSContext()!
         installCookieBindings(ctx)
+        installLoginBindings(ctx, source: context?.source ?? JSEngine.currentSource)
         ctx.exceptionHandler = { _, e in
             let message = e?.toString() ?? "未知脚本异常"
             print("[JS error] \(message)")

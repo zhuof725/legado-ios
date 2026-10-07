@@ -127,6 +127,8 @@ enum RuleRegression {
         try await HTTPResponseRegression.run(check)
         CookieStoreRegression.run(check)
         try await CookieBridgeRegression.run(check)
+        SourceLoginRegression.run(check)
+        LoginBridgeRegression.run(check)
         print("REGRESSION PASS: \(checks) 项固定断言；不声称真机网络/WebView 已验证。")
     }
 }
