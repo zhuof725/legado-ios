@@ -125,15 +125,15 @@ struct SourcesView: View {
                         Text(s.bookSourceGroup ?? s.bookSourceUrl).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
-                    if SourceLoginForm.hasLogin(s) {
-                        Button("登录") { loginSource = s }
-                            .buttonStyle(.borderless)
-                            .font(.caption)
-                    }
-                    Button("调试") { debugSource = s }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
                     Toggle("", isOn: Binding(get: { s.isEnabled }, set: { _ in store.toggleSource(s) })).labelsHidden()
+                }
+                .contentShape(Rectangle())
+                .contextMenu {
+                    // 只有配置了登录（loginUi 或可用的 loginUrl）的书源才显示「登录」。
+                    if SourceLoginForm.hasLogin(s) {
+                        Button { loginSource = s } label: { Label("登录", systemImage: "person.crop.circle") }
+                    }
+                    Button { debugSource = s } label: { Label("调试", systemImage: "ladybug") }
                 }
             }
             .onDelete { store.deleteSources(at: $0) }
