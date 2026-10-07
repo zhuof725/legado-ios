@@ -140,6 +140,7 @@ enum RuleRegression {
         ImgSrcRegression.run(check)
         InlineBubbleRegression.run(check)
         ReadingPositionRegression.run(check)
+        PaginatorRegression.run(check)
         SearchRankingRegression.run(check)
         NextUrlRegression.run(check)
         CookieDomainRegression.run(check)

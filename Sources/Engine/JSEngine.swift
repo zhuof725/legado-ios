@@ -814,9 +814,11 @@ final class JSEngine {
 
     /// 在书源上下文里执行一段 JS（登录按钮、login() 等），返回字符串结果；脚本抛错时返回 .failure。
     /// 脚本 = loginUrl 里的函数库 + 调用语句。toast 通过 ToastCenter 出口。
-    func runLoginScript(source: BookSource, library: String?, call: String) -> Result<String, LoginScriptError> {
+    func runLoginScript(source: BookSource, library: String?, call: String, formValues: [String: String] = [:]) -> Result<String, LoginScriptError> {
         let context = RuleContext(source: source)
         let ctx = makeContext(context)
+        // Legado 执行登录按钮时，`result` 是当前表单值（键为字段名）；`book`/`chapter` 在登录页没有，保持默认。
+        ctx.setObject(formValues, forKeyedSubscript: "result" as NSString)
         let openBrowser: @convention(block) (String, String) -> Void = { ToastCenter.openBrowser($0, $1) }
         ctx.setObject(openBrowser, forKeyedSubscript: "__openBrowser" as NSString)
         var thrown: String?

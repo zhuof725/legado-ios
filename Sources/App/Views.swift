@@ -160,7 +160,7 @@ struct ReaderView: View {
         ZStack {
             theme.bg.ignoresSafeArea()
             ScrollViewReader { proxy in
-                ScrollView {
+                ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 16) {
                         Color.clear.frame(height: 1).id("top")
                             .background(GeometryReader { g in

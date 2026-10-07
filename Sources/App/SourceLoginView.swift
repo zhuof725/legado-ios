@@ -135,8 +135,9 @@ struct SourceLoginView: View {
         busy = true
         message = ""
         let src = source
+        let vals = values
         Task {
-            let result = await Task.detached { JSEngine.shared.runLoginScript(source: src, library: lib, call: call) }.value
+            let result = await Task.detached { JSEngine.shared.runLoginScript(source: src, library: lib, call: call, formValues: vals) }.value
             busy = false
             switch result {
             case .failure(let e): message = "执行出错：\(e.message)"
