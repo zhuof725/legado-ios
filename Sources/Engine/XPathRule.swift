@@ -63,8 +63,7 @@ enum XPathRule {
             }
             if out.isEmpty {
                 let s = fallbackString(obj, path)
-                return s.isEmpty ? [] : s.components(separatedBy: "
-").filter { !$0.isEmpty }
+                return s.isEmpty ? [] : s.components(separatedBy: "\n").filter { !$0.isEmpty }
             }
             return out
         default: return []
