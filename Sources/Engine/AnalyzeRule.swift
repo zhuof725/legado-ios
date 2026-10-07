@@ -345,7 +345,24 @@ final class AnalyzeRule {
             if let found = ((try? el.getElementById(parts.first ?? "")) ?? nil) { list = [found] } else { list = [] }
         case "text": list = (try? el.getElementsContainingOwnText(parts.first ?? "").array()) ?? []
         case "children": list = el.children().array()
-        default: return (try? el.select(seg).array()) ?? []
+        default:
+            // Legado 默认语法：非 class/tag/id/text/children 的段按 CSS 选择器处理，
+            // 允许尾部带索引，如 .search@li!0、li.2、div.-1、li!0:1
+            var css = seg
+            var idxSpec: String? = nil
+            if let bang = seg.lastIndex(of: "!") {
+                css = String(seg[..<bang])
+                idxSpec = String(seg[bang...])
+            } else if let m = seg.range(of: "\\.(-?\\d+(:-?\\d+)*)$", options: .regularExpression) {
+                css = String(seg[..<m.lowerBound])
+                idxSpec = String(seg[seg.index(after: m.lowerBound)...])
+            }
+            if css.hasSuffix(".") { css.removeLast() }
+            if css.isEmpty { return [] }
+            let found = (try? el.select(css).array()) ?? []
+            guard let spec = idxSpec, !spec.isEmpty else { return found }
+            // 旧语法 !0:1:2 / 0:1 表示多个独立索引
+            return AnalyzeRule.pickIndexes(found, spec.replacingOccurrences(of: ":", with: ","))
         }
         if type != "children" && !parts.isEmpty { parts.removeFirst() }
         guard let idxStr = parts.first, !idxStr.isEmpty else { return list }
