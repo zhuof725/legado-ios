@@ -33,3 +33,15 @@ enum TocParseRegression {
         check(d.map(\.title) == ["卷一", "A", "B", "卷二", "C"], "目录：按 url 去重保留首次出现，空 URL 卷标题不去重")
     }
 }
+
+enum NextUrlRegression {
+    static func run(_ check: (Bool, String) -> Void) {
+        let base = "https://next.invalid/book/1/2.html"
+        check(WebBook.splitNextUrls("", base: base).isEmpty, "下一页地址：空串无结果")
+        check(WebBook.splitNextUrls("  \n \n", base: base).isEmpty, "下一页地址：全空白无结果")
+        check(WebBook.splitNextUrls("/p/3", base: base) == ["https://next.invalid/p/3"], "下一页地址：相对地址补全")
+        let multi = WebBook.splitNextUrls("/p/3\n /p/4 \n/p/3\n\nhttps://other.invalid/x", base: base)
+        check(multi == ["https://next.invalid/p/3", "https://next.invalid/p/4", "https://other.invalid/x"],
+              "下一页地址：多行去空白、去重、保序")
+    }
+}

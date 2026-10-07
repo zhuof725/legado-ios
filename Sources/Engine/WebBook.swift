@@ -147,9 +147,7 @@ enum WebBook {
             let nodes = ar.getElements(listRule)
             DebugLog.add("目录列表匹配：\(nodes.count) 项（第\(visited.count)页）")
             list.append(contentsOf: parseChapterNodes(nodes, rule: rule, ar: ar, baseUrl: url))
-            let urls = ar.getString(rule.nextTocUrl).components(separatedBy: "\n")
-                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                .map { AnalyzeUrl.absolute($0, base: url) }
+            let urls = splitNextUrls(ar.getString(rule.nextTocUrl), base: url)
             for n in urls where !visited.contains(n) && !queue.contains(n) { queue.append(n) }
         }
         // Legado 以 url 判等，LinkedHashSet 去重并保留首次出现；空 URL 的卷标题不参与去重。
@@ -157,6 +155,18 @@ enum WebBook {
         if reverse { list.reverse() }
         for i in list.indices { list[i].index = i }
         return list
+    }
+
+    /// nextTocUrl / nextContentUrl 可能返回多行地址：去空白、转绝对地址、去重并保持顺序。
+    static func splitNextUrls(_ raw: String, base: String) -> [String] {
+        var seen = Set<String>(), out: [String] = []
+        for line in raw.components(separatedBy: "\n") {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.isEmpty { continue }
+            let u = AnalyzeUrl.absolute(t, base: base)
+            if seen.insert(u).inserted { out.append(u) }
+        }
+        return out
     }
 
     /// 把目录列表节点解析成章节（不含去重与反转），便于离线测试。
@@ -191,20 +201,38 @@ enum WebBook {
     // MARK: Content
     static func content(source: BookSource, chapter: BookChapter, nextChapterUrl: String? = nil, book: Book? = nil) async throws -> String {
         guard let rule = source.ruleContent else { return "" }
-        var next: String? = chapter.url
         var visited = Set<String>()
         var parts: [String] = []
-        while let u = next, !u.isEmpty, !visited.contains(u), visited.count < 20 {
-            if let nc = nextChapterUrl, u == nc, !visited.isEmpty { break }
+        /// 抓取一页，返回正文与解析出的下一页地址（已过滤、转绝对地址）。
+        func loadPage(_ u: String) async throws -> (String, [String]) {
             visited.insert(u)
             let context = RuleContext(source: source, book: book, chapter: chapter)
             var au = AnalyzeUrl(rawUrl: u, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: context, jsLib: source.jsLib)
             if let wj = rule.webJs, !wj.isEmpty { au.webJs = wj }
             let (body, url) = try await au.fetch()
             let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: context)
-            parts.append(ar.getString(rule.content))
-            let n = ar.getString(rule.nextContentUrl).components(separatedBy: "\n").first ?? ""
-            next = n.isEmpty ? nil : AnalyzeUrl.absolute(n, base: url)
+            let text = ar.getString(rule.content)
+            let urls = splitNextUrls(ar.getString(rule.nextContentUrl), base: url)
+            return (text, urls)
+        }
+        let first = try await loadPage(chapter.url)
+        parts.append(first.0)
+        // 与 Legado BookContent 一致：下一页地址若是下一章则停止；
+        // 只有一个地址时沿链追到末页；多个地址时按顺序各取一页，不再继续追链。
+        let pending = first.1.filter { $0 != nextChapterUrl && !visited.contains($0) }
+        if pending.count == 1 {
+            var cur: String? = pending[0]
+            while let u = cur, !visited.contains(u), u != nextChapterUrl, visited.count < 20 {
+                let page = try await loadPage(u)
+                parts.append(page.0)
+                let more = page.1.filter { $0 != nextChapterUrl && !visited.contains($0) }
+                cur = more.first
+            }
+        } else if pending.count > 1 {
+            for u in pending.prefix(19) where !visited.contains(u) {
+                try Task.checkCancellation()
+                parts.append(try await loadPage(u).0)
+            }
         }
         var text = parts.joined(separator: "\n")
         if let rr = rule.replaceRegex, !rr.isEmpty {
