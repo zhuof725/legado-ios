@@ -232,7 +232,7 @@ struct AnalyzeUrl {
         #if canImport(UIKit) && canImport(WebKit)
         if webView || (webJs?.isEmpty == false) {
             let result = try await WebViewLoader.load(url: url, method: method, body: body.map { percentEncodedBody($0) },
-                                                      headers: headers, js: webJs)
+                                                      headers: headers, js: webJs, cookieJar: cookieJarEnabled)
             try Task.checkCancellation()
             return HTTPResponseData(body: result.0, url: result.1)
         }
@@ -273,11 +273,11 @@ struct AnalyzeUrl {
         if blocked || WebViewSupport.isChallenge(text ?? "") {
             DebugLog.add("被拦截/需要验证：改用 WebView；验证后会重新请求原接口")
             if let r = try? await WebViewLoader.load(url: finalUrl, method: method, body: body.map { percentEncodedBody($0) },
-                                                     headers: headers, js: webJs) {
+                                                     headers: headers, js: webJs, cookieJar: cookieJarEnabled) {
                 // JSON API 在 WebView 中会渲染为 <pre>，不能把外层HTML交给 JSONPath。
                 // 同步验证 Cookie 后重新发原始请求，保留 POST 请求体。
                 try Task.checkCancellation()
-                await WebViewLoader.syncCookiesFromWebView()
+                await WebViewLoader.syncCookiesFromWebView(host: URL(string: finalUrl)?.host, enabled: cookieJarEnabled)
                 try Task.checkCancellation()
                 if let retry = try? await session.data(for: req) {
                     try Task.checkCancellation()

@@ -4,6 +4,13 @@ import Foundation
 /// 用 WKWebView 加载网页、执行 JS 后取源码；遇到 Cloudflare 等人机验证时，
 /// 先在后台等待自动通过，不行再弹出网页让用户手动验证，并把 Cookie 同步给 URLSession。
 enum WebViewSupport {
+    /// 判断 Cookie 的 domain 是否属于目标主机（含父域，如 .a.com 属于 www.a.com）。不依赖 UIKit，便于离线测试。
+    static func cookieDomain(_ domain: String, matches host: String) -> Bool {
+        let d = domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let h = host.lowercased()
+        return !d.isEmpty && (h == d || h.hasSuffix("." + d))
+    }
+
     /// 与 WebView 保持一致的 UA，cf_clearance 等 Cookie 与 UA 绑定
     static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 
@@ -45,13 +52,13 @@ final class WebViewLoader: NSObject, WKNavigationDelegate {
     /// 加载网页并返回 (源码, 最终URL)。js 为空时返回 document.documentElement.outerHTML
     static func load(url: String, method: String = "GET", body: String? = nil,
                      headers: [String: String] = [:], js: String? = nil,
-                     timeout: Double = 25, allowInteractive: Bool = true) async throws -> (String, String) {
+                     timeout: Double = 25, allowInteractive: Bool = true, cookieJar: Bool = true) async throws -> (String, String) {
         guard let u = URL(string: url) else { throw URLError(.badURL) }
         let loader = WebViewLoader()
         if let agent = headers.first(where: { $0.key.lowercased() == "user-agent" })?.value {
             loader.webView.customUserAgent = agent
         }
-        await syncCookiesToWebView(for: u)
+        if cookieJar { await syncCookiesToWebView(for: u) }
         var req = URLRequest(url: u, timeoutInterval: timeout)
         req.httpMethod = method
         for (k, v) in headers where k.lowercased() != "user-agent" { req.setValue(v, forHTTPHeaderField: k) }
@@ -82,7 +89,7 @@ final class WebViewLoader: NSObject, WKNavigationDelegate {
             if let h = await handler(loader.webView) { html = h }
             finalUrl = loader.webView.url?.absoluteString ?? url
         }
-        await syncCookiesFromWebView()
+        await syncCookiesFromWebView(host: u.host, enabled: cookieJar)
         if let js = js, !js.isEmpty, !WebViewSupport.isChallenge(html) {
             let r = await loader.source(js: js)
             if !r.isEmpty { html = r }
@@ -110,10 +117,17 @@ final class WebViewLoader: NSObject, WKNavigationDelegate {
 
     // MARK: Cookie 同步
 
-    static func syncCookiesFromWebView() async {
+    /// 把 WebView 里的 Cookie 回流到共享存储。
+    /// - host 非空时只回流与该主机相关的 Cookie，避免把无关站点的 Cookie 带进来。
+    /// - enabled=false（书源关闭 Cookie 保存）时不回流。
+    static func syncCookiesFromWebView(host: String? = nil, enabled: Bool = true) async {
+        guard enabled else { return }
         let store = WKWebsiteDataStore.default().httpCookieStore
         let cookies: [HTTPCookie] = await withCheckedContinuation { c in store.getAllCookies { c.resume(returning: $0) } }
-        for ck in cookies { HTTPCookieStorage.shared.setCookie(ck) }
+        for ck in cookies {
+            if let h = host, !WebViewSupport.cookieDomain(ck.domain, matches: h) { continue }
+            HTTPCookieStorage.shared.setCookie(ck)
+        }
     }
 
     static func syncCookiesToWebView(for url: URL) async {

@@ -63,7 +63,7 @@ final class VerifyViewController: UIViewController {
         webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] v, _ in
             let html = v as? String
             Task { @MainActor in
-                await WebViewLoader.syncCookiesFromWebView()
+                await WebViewLoader.syncCookiesFromWebView(host: self?.webView.url?.host)
                 self?.finish(html)
             }
         }

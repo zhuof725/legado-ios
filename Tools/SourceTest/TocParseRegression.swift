@@ -45,3 +45,13 @@ enum NextUrlRegression {
               "下一页地址：多行去空白、去重、保序")
     }
 }
+
+enum CookieDomainRegression {
+    static func run(_ check: (Bool, String) -> Void) {
+        check(WebViewSupport.cookieDomain(".a.com", matches: "www.a.com"), "Cookie 域：父域 Cookie 适用于子域")
+        check(WebViewSupport.cookieDomain("www.a.com", matches: "www.a.com"), "Cookie 域：同主机适用")
+        check(!WebViewSupport.cookieDomain("a.com", matches: "nota.com"), "Cookie 域：后缀相同但不是子域，不适用")
+        check(!WebViewSupport.cookieDomain("b.com", matches: "www.a.com"), "Cookie 域：无关站点不适用")
+        check(!WebViewSupport.cookieDomain("", matches: "a.com"), "Cookie 域：空域不适用")
+    }
+}
