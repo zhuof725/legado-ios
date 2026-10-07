@@ -132,7 +132,13 @@ enum WebBook {
         var reverse = false
         var listRule = rule.chapterList ?? ""
         if listRule.hasPrefix("-") { reverse = true; listRule.removeFirst() }
-        while let u = next, !u.isEmpty, !visited.contains(u), visited.count < 30 {
+        // 与 Legado BookChapterList 一致：nextTocUrl 返回多个地址时全部抓取（不再逐页追链）；
+        // 只有一个地址时沿链继续。待抓取队列去重，最多 30 页。
+        var queue: [String] = []
+        if let first = next, !first.isEmpty { queue.append(first) }
+        while !queue.isEmpty, visited.count < 30 {
+            let u = queue.removeFirst()
+            if u.isEmpty || visited.contains(u) { continue }
             visited.insert(u)
             let context = RuleContext(source: source, book: book)
             let au = AnalyzeUrl(rawUrl: u, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: context, jsLib: source.jsLib)
@@ -140,30 +146,46 @@ enum WebBook {
             let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: context)
             let nodes = ar.getElements(listRule)
             DebugLog.add("目录列表匹配：\(nodes.count) 项（第\(visited.count)页）")
-            for item in nodes {
-                let title = ar.getString(rule.chapterName, from: item)
-                if title.isEmpty { continue }
-                let vol = ar.getString(rule.isVolume, from: item)
-                let isVol = vol == "true" || vol == "1"
-                var cu = ar.getString(rule.chapterUrl, from: item)
-                // 卷标题允许空 URL，普通章节必须有链接
-                if cu.isEmpty {
-                    if isVol {
-                        cu = "" // 卷标题可以没有链接
-                    } else {
-                        continue // 跳过没有链接的普通章节
-                    }
-                } else {
-                    cu = AnalyzeUrl.absolute(cu, base: url)
-                }
-                list.append(BookChapter(url: cu, title: title, index: 0, isVolume: isVol))
-            }
-            let n = ar.getString(rule.nextTocUrl).components(separatedBy: "\n").first ?? ""
-            next = n.isEmpty ? nil : AnalyzeUrl.absolute(n, base: url)
+            list.append(contentsOf: parseChapterNodes(nodes, rule: rule, ar: ar, baseUrl: url))
+            let urls = ar.getString(rule.nextTocUrl).components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                .map { AnalyzeUrl.absolute($0, base: url) }
+            for n in urls where !visited.contains(n) && !queue.contains(n) { queue.append(n) }
         }
+        // Legado 以 url 判等，LinkedHashSet 去重并保留首次出现；空 URL 的卷标题不参与去重。
+        list = dedupeChapters(list)
         if reverse { list.reverse() }
         for i in list.indices { list[i].index = i }
         return list
+    }
+
+    /// 把目录列表节点解析成章节（不含去重与反转），便于离线测试。
+    static func parseChapterNodes(_ nodes: [Any], rule: TocRule, ar: AnalyzeRule, baseUrl url: String) -> [BookChapter] {
+        var out: [BookChapter] = []
+        for item in nodes {
+            let title = ar.getString(rule.chapterName, from: item)
+            if title.isEmpty { continue }
+            let vol = ar.getString(rule.isVolume, from: item)
+            let isVol = vol == "true" || vol == "1"
+            var cu = ar.getString(rule.chapterUrl, from: item)
+            if cu.isEmpty {
+                if !isVol { continue } // 普通章节必须有链接；卷标题可以没有
+            } else {
+                cu = AnalyzeUrl.absolute(cu, base: url)
+            }
+            var chapter = BookChapter(url: cu, title: title, index: 0, isVolume: isVol)
+            if let ur = rule.updateTime, !ur.isEmpty {
+                chapter.updateTime = nilIfEmpty(ar.getString(ur, from: item))
+            }
+            out.append(chapter)
+        }
+        return out
+    }
+
+    /// Legado 以章节 url 为键，用 LinkedHashSet 保留首次出现；空 URL 的卷标题不参与去重。
+    static func dedupeChapters(_ list: [BookChapter]) -> [BookChapter] {
+        var seen = Set<String>()
+        return list.filter { $0.url.isEmpty || seen.insert($0.url).inserted }
     }
 
     // MARK: Content

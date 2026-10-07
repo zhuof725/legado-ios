@@ -147,4 +147,6 @@ struct BookChapter: Codable, Hashable, Identifiable {
     var title: String
     var index: Int
     var isVolume: Bool = false
+    /// ruleToc.updateTime 解析结果（可选，旧数据缺省）。
+    var updateTime: String? = nil
 }

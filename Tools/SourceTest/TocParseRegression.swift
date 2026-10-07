@@ -1,0 +1,35 @@
+import Foundation
+
+/// 目录节点解析、去重、卷标题、updateTime。离线 HTML，不发请求。
+enum TocParseRegression {
+    static func run(_ check: (Bool, String) -> Void) throws {
+        let html = """
+        <ul>
+        <li class="v">第一卷</li>
+        <li><a href="/c/1">序章</a><i>2024-01-01</i></li>
+        <li><a href="/c/2">第一章</a><i>2024-01-02</i></li>
+        <li><a href="/c/2">第一章</a><i>2024-01-02</i></li>
+        <li><span>无链接</span></li>
+        <li><a href="/c/3">第二章</a></li>
+        </ul>
+        """
+        let rule = TocRule(chapterList: "li", chapterName: "a@text||.v@text", chapterUrl: "a@href",
+                           isVolume: "class.v.0@text", updateTime: "i@text")
+        let base = "https://toc.invalid/book/1"
+        let ar = AnalyzeRule(content: html, baseUrl: base)
+        let nodes = ar.getElements("li")
+        check(nodes.count == 6, "目录：列表节点数")
+        let parsed = WebBook.parseChapterNodes(nodes, rule: rule, ar: ar, baseUrl: base)
+        check(parsed.contains { $0.url == "https://toc.invalid/c/1" && $0.title == "序章" }, "目录：相对链接补全为绝对地址")
+        check(!parsed.contains { $0.title == "无链接" }, "目录：普通章节无链接则跳过")
+        check(parsed.first(where: { $0.url == "https://toc.invalid/c/1" })?.updateTime == "2024-01-01", "目录：ruleToc.updateTime 被解析")
+        check(parsed.first(where: { $0.url == "https://toc.invalid/c/3" })?.updateTime == nil, "目录：缺少 updateTime 时为空")
+
+        func ch(_ u: String, _ t: String, vol: Bool = false) -> BookChapter {
+            BookChapter(url: u, title: t, index: 0, isVolume: vol)
+        }
+        let dup = [ch("", "卷一", vol: true), ch("a", "A"), ch("b", "B"), ch("a", "A重复"), ch("", "卷二", vol: true), ch("c", "C")]
+        let d = WebBook.dedupeChapters(dup)
+        check(d.map(\.title) == ["卷一", "A", "B", "卷二", "C"], "目录：按 url 去重保留首次出现，空 URL 卷标题不去重")
+    }
+}
