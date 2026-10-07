@@ -343,6 +343,42 @@ final class JSEngine {
     java.getElement=function(r){return (typeof __ruleGetElements==='function')?__ruleGetElements(String(r))[0]:null};
     java.getElements=function(r){return (typeof __ruleGetElements==='function')?__ruleGetElements(String(r)):[]};
     java.setContent=function(c){__ruleSetContent(c);result=c};
+    // ---- crypto / codec (Hutool-compatible subset); byte arrays are signed ints like Java ----
+    function __bytes(v,charsetHint){
+        if(v==null){return null;}
+        if(typeof v==='string'){return JSON.parse(__strToBytes(v,charsetHint||'UTF-8'));}
+        if(Array.isArray(v)||(typeof v.length==='number'&&typeof v!=='function')){
+            var a=[];for(var i=0;i<v.length;i++){a.push(Number(v[i]));}return a;
+        }
+        throw new TypeError('Expected a string or byte array');
+    }
+    function __cryptoKey(v){return typeof v==='string'?JSON.stringify(__bytes(v)):JSON.stringify(__bytes(v));}
+    java.strToBytes=function(s,cs){return JSON.parse(__strToBytes(String(s),cs==null?'UTF-8':String(cs)));};
+    java.bytesToStr=function(b,cs){return String(__bytesToStr(JSON.stringify(__bytes(b)),cs==null?'UTF-8':String(cs)));};
+    java.base64DecodeToByteArray=function(s){
+        if(s==null||String(s).trim()===''){return null;}
+        var r=__base64ToBytes(String(s));if(r==null){return null;}return JSON.parse(r);
+    };
+    java.hexDecodeToByteArray=function(s){return JSON.parse(__hexToBytes(String(s)));};
+    java.digestHex=function(d,a){return String(__digest(String(d),String(a),'hex'));};
+    java.digestBase64Str=function(d,a){return String(__digest(String(d),String(a),'base64'));};
+    java.HMacHex=function(d,a,k){return String(__hmac(String(d),String(a),String(k),'hex'));};
+    java.HMacBase64=function(d,a,k){return String(__hmac(String(d),String(a),String(k),'base64'));};
+    java.createSymmetricCrypto=function(transformation,key,iv){
+        var t=String(transformation);
+        var kb=JSON.stringify(__bytes(key));
+        var ib=(iv==null)?'':JSON.stringify(__bytes(iv));
+        var id=__cipherCreate(t,kb,ib);
+        return {
+            decrypt:function(d){return JSON.parse(__cipherRun(id,'decrypt',typeof d==='string'?'s':'b',typeof d==='string'?d:JSON.stringify(__bytes(d))));},
+            decryptStr:function(d){return String(__cipherRun(id,'decryptStr',typeof d==='string'?'s':'b',typeof d==='string'?d:JSON.stringify(__bytes(d))));},
+            encrypt:function(d){return JSON.parse(__cipherRun(id,'encrypt',typeof d==='string'?'s':'b',typeof d==='string'?d:JSON.stringify(__bytes(d))));},
+            encryptBase64:function(d){return String(__cipherRun(id,'encryptBase64',typeof d==='string'?'s':'b',typeof d==='string'?d:JSON.stringify(__bytes(d))));},
+            encryptHex:function(d){return String(__cipherRun(id,'encryptHex',typeof d==='string'?'s':'b',typeof d==='string'?d:JSON.stringify(__bytes(d))));}
+        };
+    };
+    java.androidId=function(){return String(__deviceId());};
+    java.deviceID=function(){return String(__deviceId());};
     java.utf8ToGbk=function(s){return s};
     java.t2s=function(s){return s};java.s2t=function(s){return s};
     java.randomUUID=function(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return (c=='x'?r:(r&3|8)).toString(16)})};
@@ -446,9 +482,144 @@ final class JSEngine {
         ctx.setObject(hRemove, forKeyedSubscript: "__loginHeaderRemove" as NSString)
     }
 
+    /// Crypto errors are thrown as CryptoError with a fixed message; inputs never appear in them.
+    private func installCryptoBindings(_ ctx: JSContext) {
+        func fail(_ message: String) {
+            guard let current = JSContext.current() else { return }
+            let e = JSValue(newErrorFromMessage: message, in: current)
+            e?.setObject("CryptoError", forKeyedSubscript: "name" as NSString)
+            current.exception = e
+        }
+        func describe(_ error: Error) -> String {
+            switch error as? SourceCrypto.CryptoError {
+            case .unsupportedTransformation?: return "Unsupported cipher transformation"
+            case .invalidKeyLength?: return "Invalid key length"
+            case .invalidIVLength?: return "Invalid IV length"
+            case .invalidInput?: return "Invalid crypto input"
+            case .unsupportedDigest?: return "Unsupported digest algorithm"
+            default: return "Crypto operation failed"
+            }
+        }
+        func parseBytes(_ json: String) throws -> Data {
+            guard let d = json.data(using: .utf8),
+                  let arr = try? JSONSerialization.jsonObject(with: d) as? [NSNumber] else {
+                throw SourceCrypto.CryptoError.invalidInput
+            }
+            return try SourceCrypto.fromSigned(arr.map { $0.intValue })
+        }
+        func bytesJSON(_ data: Data) -> String {
+            let arr = SourceCrypto.toSigned(data)
+            guard let d = try? JSONSerialization.data(withJSONObject: arr),
+                  let s = String(data: d, encoding: .utf8) else { return "[]" }
+            return s
+        }
+        func encoding(_ name: String) -> String.Encoding? {
+            switch name.uppercased().replacingOccurrences(of: "-", with: "") {
+            case "UTF8": return .utf8
+            case "UTF16": return .utf16
+            case "ISO88591", "LATIN1": return .isoLatin1
+            case "ASCII", "USASCII": return .ascii
+            case "GBK", "GB2312", "GB18030":
+                return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(
+                    CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
+            default: return nil
+            }
+        }
+        let strToBytes: @convention(block) (String, String) -> String = { s, cs in
+            guard let enc = encoding(cs), let data = s.data(using: enc) else {
+                fail("Unsupported charset"); return "[]"
+            }
+            return bytesJSON(data)
+        }
+        let bytesToStr: @convention(block) (String, String) -> String = { json, cs in
+            do {
+                guard let enc = encoding(cs) else { throw SourceCrypto.CryptoError.invalidInput }
+                return String(data: try parseBytes(json), encoding: enc) ?? ""
+            } catch { fail(describe(error)); return "" }
+        }
+        let base64ToBytes: @convention(block) (String) -> String? = { s in
+            guard let d = SourceCrypto.base64Decode(s) else { return nil }
+            return bytesJSON(d)
+        }
+        let hexToBytes: @convention(block) (String) -> String = { s in
+            do { return bytesJSON(try SourceCrypto.hexDecode(s)) }
+            catch { fail(describe(error)); return "[]" }
+        }
+        let digest: @convention(block) (String, String, String) -> String = { d, alg, fmt in
+            do {
+                return fmt == "hex" ? try SourceCrypto.digestHex(d, algorithm: alg)
+                                    : try SourceCrypto.digestBase64(d, algorithm: alg)
+            } catch { fail(describe(error)); return "" }
+        }
+        let hmac: @convention(block) (String, String, String, String) -> String = { d, alg, key, fmt in
+            do {
+                return fmt == "hex" ? try SourceCrypto.hmacHex(d, algorithm: alg, key: key)
+                                    : try SourceCrypto.hmacBase64(d, algorithm: alg, key: key)
+            } catch { fail(describe(error)); return "" }
+        }
+        // Ciphers live only as long as this JSContext.
+        var ciphers: [Int: SourceCrypto.Cipher] = [:]
+        var nextId = 1
+        let create: @convention(block) (String, String, String) -> Int = { t, keyJSON, ivJSON in
+            do {
+                let key = try parseBytes(keyJSON)
+                let iv: Data? = ivJSON.isEmpty ? nil : try parseBytes(ivJSON)
+                let id = nextId; nextId += 1
+                ciphers[id] = try SourceCrypto.Cipher(transformation: t, key: key, iv: iv)
+                return id
+            } catch { fail(describe(error)); return 0 }
+        }
+        let run: @convention(block) (Int, String, String, String) -> String = { id, op, kind, payload in
+            guard let c = ciphers[id] else { fail("Invalid cipher"); return "" }
+            do {
+                let isString = kind == "s"
+                switch op {
+                case "decrypt":
+                    let plain = isString ? try c.decryptInput(payload) : try c.decrypt(try parseBytes(payload))
+                    return bytesJSON(plain)
+                case "decryptStr":
+                    if isString { return try c.decryptStr(payload) }
+                    guard let s = String(data: try c.decrypt(try parseBytes(payload)), encoding: .utf8) else {
+                        throw SourceCrypto.CryptoError.invalidInput
+                    }
+                    return s
+                case "encrypt":
+                    return bytesJSON(try c.encrypt(isString ? Data(payload.utf8) : try parseBytes(payload)))
+                case "encryptBase64":
+                    return try c.encrypt(isString ? Data(payload.utf8) : try parseBytes(payload)).base64EncodedString()
+                case "encryptHex":
+                    return SourceCrypto.hexEncode(try c.encrypt(isString ? Data(payload.utf8) : try parseBytes(payload)))
+                default: throw SourceCrypto.CryptoError.invalidInput
+                }
+            } catch { fail(describe(error)); return "" }
+        }
+        // iOS has no ANDROID_ID. A stable per-install identifier plays the same role.
+        let deviceId: @convention(block) () -> String = { JSEngine.installIdentifier }
+        ctx.setObject(strToBytes, forKeyedSubscript: "__strToBytes" as NSString)
+        ctx.setObject(bytesToStr, forKeyedSubscript: "__bytesToStr" as NSString)
+        ctx.setObject(base64ToBytes, forKeyedSubscript: "__base64ToBytes" as NSString)
+        ctx.setObject(hexToBytes, forKeyedSubscript: "__hexToBytes" as NSString)
+        ctx.setObject(digest, forKeyedSubscript: "__digest" as NSString)
+        ctx.setObject(hmac, forKeyedSubscript: "__hmac" as NSString)
+        ctx.setObject(create, forKeyedSubscript: "__cipherCreate" as NSString)
+        ctx.setObject(run, forKeyedSubscript: "__cipherRun" as NSString)
+        ctx.setObject(deviceId, forKeyedSubscript: "__deviceId" as NSString)
+    }
+
+    /// Stable 16-hex-digit identifier, generated once per app install and kept in UserDefaults.
+    /// Same shape as Android's ANDROID_ID; not tied to any hardware or account.
+    static var installIdentifier: String {
+        let key = "SourceInstallIdentifier"
+        if let existing = UserDefaults.standard.string(forKey: key), existing.count == 16 { return existing }
+        let fresh = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(16))
+        UserDefaults.standard.set(fresh, forKey: key)
+        return fresh
+    }
+
     private func makeContext(_ context: RuleContext? = nil) -> JSContext {
         let ctx = JSContext()!
         installCookieBindings(ctx)
+        installCryptoBindings(ctx)
         installLoginBindings(ctx, source: context?.source ?? JSEngine.currentSource)
         ctx.exceptionHandler = { _, e in
             let message = e?.toString() ?? "未知脚本异常"
