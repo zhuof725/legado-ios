@@ -93,3 +93,15 @@ enum InlineBubbleRegression {
         check(got == ["https://c.invalid/viewer"], "评论点击：网址被捕获而不是弹系统浏览器")
     }
 }
+
+enum ImgSrcRegression {
+    static func run(_ check: (Bool, String) -> Void) {
+        let a = "<img src=\"data:image/svg+xml;base64,QUJD,{\"style\":\"text\",\"click\":\"showCmt('1','2')\"}\">"
+        check(ContentBlocks.imgSrc(in: a) == "data:image/svg+xml;base64,QUJD,{\"style\":\"text\",\"click\":\"showCmt('1','2')\"}", "img src：选项 JSON 含未转义引号时完整读出")
+        let b = "<img src=\"https://a.invalid/x.png\" width=\"10\">"
+        check(ContentBlocks.imgSrc(in: b) == "https://a.invalid/x.png", "img src：普通地址不受影响")
+        check(ContentBlocks.imgSrc(in: "<img>") == nil, "img src：没有 src 为空")
+        let c = "<img src='https://a.invalid/y.png'>"
+        check(ContentBlocks.imgSrc(in: c) == "https://a.invalid/y.png", "img src：单引号写法")
+    }
+}

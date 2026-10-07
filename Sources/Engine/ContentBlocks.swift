@@ -80,7 +80,7 @@ enum ContentBlocks {
             } else {
                 // 图片是独立块：先结束当前段落。
                 flush()
-                if let src = attribute("src", in: tag), !src.isEmpty {
+                if let src = imgSrc(in: tag), !src.isEmpty {
                     let clean = stripOptions(src)
                     let opts = srcOptions(src)
                     let click = clickURL(in: tag) ?? optionClick(in: src) ?? clickFromOptions(opts)
@@ -105,6 +105,22 @@ enum ContentBlocks {
             t = t.replacingOccurrences(of: e, with: d)
         }
         return t.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{3000}")))
+    }
+
+    /// img 的 src。书源常把选项 JSON 直接拼在 src 里且不转义引号：
+    /// `src="data:…base64,XXX,{"style":"text","click":"showCmt('1')"}"`。
+    /// 普通属性解析会在第一个引号处截断，这里识别 `,{` 结尾的情况，读到 `}"` 为止。
+    static func imgSrc(in tag: String) -> String? {
+        guard let r = tag.range(of: "\\bsrc\\s*=\\s*\"", options: [.regularExpression, .caseInsensitive]) else {
+            return attribute("src", in: tag)
+        }
+        let rest = tag[r.upperBound...]
+        guard let q = rest.firstIndex(of: "\"") else { return nil }
+        let first = String(rest[..<q])
+        if first.hasSuffix(",{"), let end = rest.range(of: "}\"", range: q..<rest.endIndex) {
+            return String(rest[..<end.lowerBound]) + "}"
+        }
+        return first
     }
 
     static func attribute(_ name: String, in tag: String) -> String? {
