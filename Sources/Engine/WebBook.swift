@@ -10,10 +10,35 @@ enum WebBook {
         return parseBookList(source: source, body: body, baseUrl: url, rule: rule, context: context)
     }
 
-    static func parseBookList(source: BookSource, body: String, baseUrl: String, rule: SearchRule, context: RuleContext? = nil) -> [Book] {
+    /// 与 Kotlin 的 `String.matches(Regex)` 一致：必须整串匹配。
+    static func matchesWholly(_ text: String, pattern: String) -> Bool {
+        guard let re = try? NSRegularExpression(pattern: "^(?:" + pattern + ")$") else { return false }
+        return re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
+    /// 搜索结果页本身就是详情页时（站点精确匹配后跳转），按详情规则取出这一本书。
+    static func bookFromInfoPage(source: BookSource, body: String, url: String, listContext: RuleContext) -> [Book] {
+        var b = Book(bookUrl: url, name: "", origin: source.bookSourceUrl)
+        b.originName = source.bookSourceName
+        let infoContext = listContext.forkForBook(b)
+        let parsed = parseBookInfo(source: source, book: b, body: body, url: url, context: infoContext)
+        // 详情解析会把 tocUrl 兜底成当前页；这里只需要一条搜索结果。
+        return parsed.name.isEmpty ? [] : [parsed]
+    }
+
+    static func parseBookList(source: BookSource, body: String, baseUrl: String, rule: SearchRule, context: RuleContext? = nil, isSearch: Bool = true) -> [Book] {
         let listContext = context ?? RuleContext(source: source)
+        let hasPattern = !(source.bookUrlPattern ?? "").isEmpty
+        if isSearch, hasPattern, let pattern = source.bookUrlPattern, matchesWholly(baseUrl, pattern: pattern) {
+            DebugLog.add("链接为详情页（bookUrlPattern 命中）")
+            return bookFromInfoPage(source: source, body: body, url: baseUrl, listContext: listContext)
+        }
         let ar = AnalyzeRule(content: body, baseUrl: baseUrl, jsLib: source.jsLib, context: listContext)
         let items = ar.getElements(rule.bookList)
+        if items.isEmpty, !hasPattern {
+            DebugLog.add("列表为空，按详情页解析")
+            return bookFromInfoPage(source: source, body: body, url: baseUrl, listContext: listContext)
+        }
         // 冻结列表阶段变量；每个条目再独立派生，避免循环中的写入串书。
         let snapshot = listContext.forkForBook(Book(bookUrl: "", name: "", origin: source.bookSourceUrl))
         var out: [Book] = []
@@ -54,6 +79,13 @@ enum WebBook {
         let context = RuleContext(source: source, book: b)
         let au = AnalyzeUrl(rawUrl: book.bookUrl, baseUrl: source.bookSourceUrl, sourceHeader: source.header, context: context, jsLib: source.jsLib)
         let (body, url) = try await au.fetch()
+        return parseBookInfo(source: source, book: b, body: body, url: url, context: context)
+    }
+
+    /// 解析详情页内容。bookInfo 与“搜索结果直接是详情页”两条路径共用。
+    static func parseBookInfo(source: BookSource, book: Book, body: String, url: String, context: RuleContext) -> Book {
+        var b = book
+        guard let rule = source.ruleBookInfo else { return b }
         let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: context)
         var root: Any? = nil
         if let i = rule.`init`, !i.isEmpty {

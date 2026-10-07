@@ -64,6 +64,7 @@ struct BookSource: Codable, Hashable, Identifiable {
     var loginUi: String?
     var searchUrl: String?
     var exploreUrl: String?
+    var bookUrlPattern: String?
     var ruleSearch: SearchRule?
     var ruleExplore: SearchRule?
     var ruleBookInfo: BookInfoRule?
@@ -76,7 +77,7 @@ struct BookSource: Codable, Hashable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case bookSourceUrl, bookSourceName, bookSourceGroup, bookSourceType, bookSourceComment
-        case enabled, header, jsLib, loginUrl, loginUi, searchUrl, exploreUrl
+        case enabled, header, jsLib, loginUrl, loginUi, searchUrl, exploreUrl, bookUrlPattern
         case ruleSearch, ruleExplore, ruleBookInfo, ruleToc, ruleContent, customOrder, lastUpdateTime
     }
 
@@ -94,6 +95,7 @@ struct BookSource: Codable, Hashable, Identifiable {
         loginUi = try? c.decodeIfPresent(String.self, forKey: .loginUi)
         searchUrl = try? c.decodeIfPresent(String.self, forKey: .searchUrl)
         exploreUrl = try? c.decodeIfPresent(String.self, forKey: .exploreUrl)
+        bookUrlPattern = try? c.decodeIfPresent(String.self, forKey: .bookUrlPattern)
         ruleSearch = BookSource.lenient(c, .ruleSearch)
         ruleExplore = BookSource.lenient(c, .ruleExplore)
         ruleBookInfo = BookSource.lenient(c, .ruleBookInfo)
