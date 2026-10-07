@@ -5,6 +5,9 @@ import Foundation
 /// 章末评论或精选评论则是 `<img src="data:image/svg+xml;base64,…" onClick="java.startBrowser('URL')"/>`。
 enum ContentBlock: Equatable {
     case paragraph(text: String, commentCount: Int, commentURL: String?)
+    /// 行内小图（书源 `style:"text"` 的气泡图）：按文字大小显示在上一段末尾。
+    /// src 是 data: 或网址；count 是气泡里的数字（从 SVG 文本里读出，读不到为 nil）。
+    case inlineBubble(src: String, count: Int?, clickURL: String?)
     case image(src: String, clickURL: String?)
     /// 书源用 SVG 画的「热评」卡片，改用原生卡片显示：label 为红色标签文字，text 为评论内容。
     case hotComment(label: String, text: String, clickURL: String?)
@@ -28,7 +31,22 @@ enum ContentBlocks {
         for line in text.components(separatedBy: .newlines) {
             appendLine(line, into: &blocks)
         }
-        return blocks
+        return mergeInlineBubbles(blocks)
+    }
+
+    /// 把行内气泡并入它前面的段落（count 与点击目标取自气泡）。前面不是段落时，丢弃该气泡。
+    static func mergeInlineBubbles(_ blocks: [ContentBlock]) -> [ContentBlock] {
+        var out: [ContentBlock] = []
+        for b in blocks {
+            if case .inlineBubble(_, let count, let click) = b {
+                if case .paragraph(let t, let c, let u)? = out.last {
+                    out[out.count - 1] = .paragraph(text: t, commentCount: count ?? max(c, 1), commentURL: click ?? u)
+                }
+            } else {
+                out.append(b)
+            }
+        }
+        return out
     }
 
     private static let tagPattern = try! NSRegularExpression(pattern: "<(comment|img)\\b[^>]*?/?>", options: [.caseInsensitive])
@@ -64,8 +82,12 @@ enum ContentBlocks {
                 flush()
                 if let src = attribute("src", in: tag), !src.isEmpty {
                     let clean = stripOptions(src)
-                    let click = clickURL(in: tag) ?? optionClick(in: src)
-                    if let svg = svgText(clean), let native = nativeBlock(fromSVG: svg, click: click) {
+                    let opts = srcOptions(src)
+                    let click = clickURL(in: tag) ?? optionClick(in: src) ?? clickFromOptions(opts)
+                    if opts["style"]?.lowercased() == "text" {
+                        // 书源要求按文字大小行内显示：接到上一段末尾，而不是单独成大图。
+                        blocks.append(.inlineBubble(src: clean, count: svgTexts(svgText(clean) ?? "").compactMap { Int($0) }.first, clickURL: click))
+                    } else if let svg = svgText(clean), let native = nativeBlock(fromSVG: svg, click: click) {
                         blocks.append(native)
                     } else {
                         blocks.append(.image(src: clean, clickURL: click))
@@ -111,6 +133,31 @@ enum ContentBlocks {
     static func stripOptions(_ src: String) -> String {
         if let r = src.range(of: ",{") { return String(src[..<r.lowerBound]) }
         return src
+    }
+
+    /// src 后面 `,{"style":"text","type":"qd","click":"showCmt('1','2','3','4')"}` 的键值（字符串值）。
+    static func srcOptions(_ src: String) -> [String: String] {
+        guard let r = src.range(of: ",{") else { return [:] }
+        let json = String(src[src.index(after: r.lowerBound)...])
+        if let d = json.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            return o.reduce(into: [:]) { $0[$1.key] = "\($1.value)" }
+        }
+        // 书源常写成 {"style":"text","click":"showCmt('1')"} 里含未转义引号的写法：退回逐键提取。
+        var out: [String: String] = [:]
+        for key in ["style", "type", "click"] {
+            if let re = try? NSRegularExpression(pattern: "\"" + key + "\"\\s*:\\s*\"(.*?)\"(?:\\s*[,}])"),
+               let m = re.firstMatch(in: json, range: NSRange(location: 0, length: (json as NSString).length)) {
+                out[key] = (json as NSString).substring(with: m.range(at: 1))
+            }
+        }
+        return out
+    }
+
+    /// click 是 JS 调用（如 showCmt('书','章','段','数')）时，不是网址；留给调用方按书源执行。
+    static func clickFromOptions(_ opts: [String: String]) -> String? {
+        guard let c = opts["click"], !c.isEmpty else { return nil }
+        if let u = urlInCall(c) { return u }
+        return "js:" + c
     }
 
     static func optionClick(in src: String) -> String? {

@@ -211,9 +211,18 @@ private final class HTTPBridgeWaiter: @unchecked Sendable {
 
 /// JS 里 java.toast / longToast 的消息出口：界面订阅 handler 即可显示；没有订阅者时只丢弃。
 enum ToastCenter {
+    /// 评论页等「打开网页」请求的统一入口。界面收到后弹半屏网页。
     private static var browserHandler: ((String, String) -> Void)?
     static func setBrowserHandler(_ h: ((String, String) -> Void)?) { lock.lock(); browserHandler = h; lock.unlock() }
-    static func openBrowser(_ url: String, _ title: String) { lock.lock(); let h = browserHandler; lock.unlock(); h?(url, title) }
+    private static var captures: [(String) -> Void] = []
+    static func pushBrowserCapture(_ f: @escaping (String) -> Void) { lock.lock(); captures.append(f); lock.unlock() }
+    static func popBrowserCapture() { lock.lock(); if !captures.isEmpty { captures.removeLast() }; lock.unlock() }
+    static func openBrowser(_ url: String, _ title: String) {
+        lock.lock(); let h = browserHandler; let cap = captures.last; lock.unlock()
+        // 有捕获者（评论点击）时只交给它，不再弹系统浏览器。
+        if let cap = cap { cap(url); return }
+        h?(url, title)
+    }
     private static let lock = NSLock()
     private static var handler: ((String) -> Void)?
     static func setHandler(_ h: ((String) -> Void)?) { lock.lock(); handler = h; lock.unlock() }
@@ -346,6 +355,9 @@ final class JSEngine {
     java.connect=function(u){return __response(java.connectNative(String(u)))};
     java.ajaxAll=function(arr){var o=[];for(var i=0;i<arr.length;i++){o.push(__response(java.connectNative(String(arr[i]))));}return o;};
     java.startBrowserAwait=function(u,t){return java.connect(String(u))};
+    java.showBrowser=function(u,h,js,cfg){if(typeof __openBrowser==='function'){__openBrowser(String(u||''),'');}return '';};
+    java.sleep=function(ms){return '';};
+    java.getThemeConfig=function(){return 'light';};
     java.startBrowser=function(u,t){if(typeof __openBrowser==='function'){__openBrowser(String(u),String(t||''));}return ''};
     java.webView=function(h,u,js){return java.ajax(String(u))};
     var __localRuleVars=Object.create(null);
@@ -779,6 +791,19 @@ final class JSEngine {
             return String(data: d, encoding: .utf8)
         }
         return "\(v)"
+    }
+
+    /// 阅读器里点击评论气泡：click 是书源里的函数调用（如 showCmt('书','章','段','数')），
+    /// 在书源的 loginUrl 函数库里执行，收集它通过 java.showBrowser/startBrowser 想打开的网址。
+    func resolveClickURL(source: BookSource, click: String) -> String? {
+        let lib = SourceLoginForm.loginScript(source.loginUrl) ?? ""
+        var opened: String?
+        let lock = NSLock()
+        ToastCenter.pushBrowserCapture { u in lock.lock(); if opened == nil, !u.isEmpty { opened = u }; lock.unlock() }
+        defer { ToastCenter.popBrowserCapture() }
+        _ = runLoginScript(source: source, library: lib, call: click)
+        lock.lock(); defer { lock.unlock() }
+        return opened
     }
 
     /// 在书源上下文里执行一段 JS（登录按钮、login() 等），返回字符串结果；脚本抛错时返回 .failure。

@@ -81,9 +81,42 @@ final class AppStore: ObservableObject {
 
     func updateProgress(_ b: Book, index: Int, title: String?) {
         guard let i = books.firstIndex(where: { $0.bookUrl == b.bookUrl }) else { return }
+        // 换章时章内位置归零；同一章内只更新时间。
+        if books[i].durChapterIndex != index { books[i].durChapterPos = 0 }
         books[i].durChapterIndex = index
         books[i].durChapterTitle = title
         books[i].lastReadAt = Date()
+        saveBooks()
+    }
+
+    /// 章内阅读位置：0...1000 的千分比（滚动偏移 / 可滚动总长）。用比例而不是像素，改字号后位置大致仍对。
+    func updateScrollPosition(_ b: Book, permille: Int) {
+        guard let i = books.firstIndex(where: { $0.bookUrl == b.bookUrl }) else { return }
+        let v = min(max(permille, 0), 1000)
+        guard books[i].durChapterPos != v else { return }
+        books[i].durChapterPos = v
+        books[i].lastReadAt = Date()
+        saveBooksDebounced()
+    }
+
+    func scrollPosition(_ b: Book) -> Int {
+        books.first(where: { $0.bookUrl == b.bookUrl })?.durChapterPos ?? b.durChapterPos
+    }
+
+    private var saveTask: Task<Void, Never>?
+    /// 滚动时会频繁更新，合并写盘；进入后台或离开页面时调用 flushProgress 立即落盘。
+    private func saveBooksDebounced() {
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if Task.isCancelled { return }
+            self?.saveBooks()
+        }
+    }
+
+    func flushProgress() {
+        saveTask?.cancel()
+        saveTask = nil
         saveBooks()
     }
 

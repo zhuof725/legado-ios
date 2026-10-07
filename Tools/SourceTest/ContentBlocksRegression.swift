@@ -60,3 +60,36 @@ enum CommentCardRegression {
         check(!ContentBlocks.parse("纯文本").contains { if case .paragraph(_, let c, _) = $0 { return c > 0 }; return false }, "热评卡片：纯文本不产生评论块")
     }
 }
+
+enum InlineBubbleRegression {
+    private static func b64(_ s: String) -> String { Data(s.utf8).base64EncodedString() }
+
+    static func run(_ check: (Bool, String) -> Void) {
+        // 番茄书源：气泡是 style=text 的 SVG，点击是书源函数调用而不是网址。
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"126\" height=\"146\"><text x=\"38\" y=\"97\">12</text></svg>"
+        let src = "data:image/svg+xml;base64,\(b64(svg)),{\"style\":\"text\",\"type\":\"qd\",\"click\":\"showCmt('b1','c2','3','12')\"}"
+        let raw = "他赶至窗户边上。<img src=\"\(src)\">\n下一段"
+        let blocks = ContentBlocks.parse(raw)
+        check(blocks.count == 2, "行内气泡：并入前一段，不单独成块")
+        check(blocks.first == .paragraph(text: "他赶至窗户边上。", commentCount: 12, commentURL: "js:showCmt('b1','c2','3','12')"),
+              "行内气泡：评论数取自图里的数字，点击保留为书源函数调用")
+        check(ContentBlocks.srcOptions(src)["style"] == "text" && ContentBlocks.srcOptions(src)["type"] == "qd", "行内气泡：选项里的 style/type")
+        check(ContentBlocks.clickFromOptions(["click": "showCmt('1')"]) == "js:showCmt('1')", "点击目标：函数调用以 js: 标记")
+        check(ContentBlocks.clickFromOptions(["click": "java.startBrowser('https://a.invalid/x')"]) == "https://a.invalid/x", "点击目标：startBrowser 直接取网址")
+        check(ContentBlocks.clickFromOptions([:]) == nil, "点击目标：没有 click 时为空")
+        // 前面没有段落的孤立气泡丢弃，不崩溃
+        check(ContentBlocks.parse("<img src=\"\(src)\">").isEmpty, "行内气泡：没有前文时丢弃")
+        // style 不是 text 的图片仍是独立图片
+        let full = "data:image/svg+xml;base64,\(b64("<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"3\"/></svg>")),{\"style\":\"full\"}"
+        check({ if case .image? = ContentBlocks.parse("x<img src=\"\(full)\">").last { return true }; return false }(), "整行图片：style=full 仍是独立图片块")
+
+        // 书源脚本里 showBrowser/startBrowser 的网址可以被捕获
+        let ctx = RuleContext()
+        _ = ctx
+        var got: [String] = []
+        ToastCenter.pushBrowserCapture { got.append($0) }
+        defer { ToastCenter.popBrowserCapture() }
+        ToastCenter.openBrowser("https://c.invalid/viewer", "")
+        check(got == ["https://c.invalid/viewer"], "评论点击：网址被捕获而不是弹系统浏览器")
+    }
+}

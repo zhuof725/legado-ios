@@ -141,6 +141,11 @@ struct ReaderView: View {
     @State private var text = ""
     @State private var blocks: [ContentBlock] = []
     @State private var commentURL: URL?
+    @State private var commentBusy = false
+    @State private var restorePermille: Int?
+    @State private var contentHeight: CGFloat = 0
+    @State private var viewportHeight: CGFloat = 0
+    @Environment(\.scenePhase) private var scenePhase
     @State private var loading = true
     @State private var error: String?
     @State private var showToc = false
@@ -158,6 +163,9 @@ struct ReaderView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         Color.clear.frame(height: 1).id("top")
+                            .background(GeometryReader { g in
+                                Color.clear.preference(key: ScrollOffsetKey.self, value: -g.frame(in: .named("reader")).minY)
+                            })
                         if !chapters.isEmpty, index < chapters.count {
                             Text(chapters[index].title).font(.title3.bold())
                         }
@@ -185,8 +193,39 @@ struct ReaderView: View {
                     .foregroundStyle(theme.fg)
                     .padding(.horizontal, 20)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
+                    })
+                    // 等间距透明锚点：位置恢复时按比例选一个滚过去。锚点只占背景，不影响排版。
+                    .background(alignment: .top) {
+                        GeometryReader { g in
+                            let scrollable = max(g.size.height - viewportHeight, 0)
+                            ZStack(alignment: .top) {
+                                ForEach(0...100, id: \.self) { i in
+                                    Color.clear.frame(width: 1, height: 1)
+                                        .offset(y: scrollable * CGFloat(i) / 100)
+                                        .id("slot-\(i)")
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .top)
+                        }
+                    }
                 }
-                .onChange(of: index) { _ in proxy.scrollTo("top", anchor: .top) }
+                .coordinateSpace(name: "reader")
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: ViewportHeightKey.self, value: g.size.height)
+                })
+                .onPreferenceChange(ContentHeightKey.self) { h in
+                    contentHeight = h
+                    applyRestoreIfReady(proxy: proxy)
+                }
+                .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
+                .onPreferenceChange(ScrollOffsetKey.self) { offset in recordScroll(offset) }
+                .onChange(of: index) { _ in
+                    restorePermille = nil
+                    proxy.scrollTo("top", anchor: .top)
+                }
+                .onChange(of: loading) { _ in applyRestoreIfReady(proxy: proxy) }
             }
             .onTapGesture { withAnimation { showBars.toggle() } }
         }
@@ -250,6 +289,8 @@ struct ReaderView: View {
             .presentationDetents([.medium])
         }
         .sheet(item: $commentURL) { link in CommentSheet(url: link) }
+        .onChange(of: scenePhase) { phase in if phase != .active { store.flushProgress() } }
+        .onDisappear { store.flushProgress() }
         .task { await start() }
     }
 
@@ -272,7 +313,45 @@ struct ReaderView: View {
         }
         if chapters.isEmpty { error = "目录为空，书源可能不兼容"; loading = false; return }
         index = readableIndex(from: index, direction: 1) ?? 0
+        restorePermille = store.scrollPosition(book) > 0 ? store.scrollPosition(book) : nil
         await loadContent()
+    }
+
+    /// 记录滚动位置（千分比）。内容还没排好、或正在恢复位置时不记录，避免把 0 写回去覆盖已存的位置。
+    private func recordScroll(_ offset: CGFloat) {
+        guard !loading, restorePermille == nil else { return }
+        let scrollable = contentHeight - viewportHeight
+        guard scrollable > 40 else { return }
+        let p = Int((min(max(offset, 0), scrollable) / scrollable) * 1000)
+        store.updateScrollPosition(book, permille: p)
+    }
+
+    /// 内容加载并排版完成后，滚到上次保存的位置（只恢复一次）。
+    private func applyRestoreIfReady(proxy: ScrollViewProxy) {
+        guard let target = restorePermille, !loading, contentHeight > viewportHeight + 40 else { return }
+        restorePermille = nil
+        // 内容后面铺了 101 个等间距的透明锚点（0...100），选最接近的一个，把它对齐到视口顶部。
+        let slot = min(max(Int((Double(target) / 10).rounded()), 0), 100)
+        DispatchQueue.main.async {
+            withAnimation(nil) { proxy.scrollTo("slot-\(slot)", anchor: .top) }
+        }
+    }
+
+    /// 点击评论：网址直接弹评论页；`js:` 开头是书源函数调用，先在后台执行拿到网址。
+    private func openComment(_ target: String?) {
+        guard let t = target, !t.isEmpty else { return }
+        if t.hasPrefix("js:") {
+            guard let src = store.source(for: book.origin), !commentBusy else { return }
+            commentBusy = true
+            let call = String(t.dropFirst(3))
+            Task {
+                let url = await Task.detached { JSEngine.shared.resolveClickURL(source: src, click: call) }.value
+                commentBusy = false
+                if let u = url, let link = URL(string: u) { commentURL = link }
+            }
+        } else if let link = URL(string: t) {
+            commentURL = link
+        }
     }
 
     @ViewBuilder
@@ -287,10 +366,12 @@ struct ReaderView: View {
                 .lineSpacing(settings.lineSpacing)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                .onTapGesture { if count > 0, let u = url, let link = URL(string: u) { commentURL = link } }
+                .onTapGesture { if count > 0 { openComment(url) } }
+        case .inlineBubble:
+            EmptyView()
         case .image(let src, let click):
             ContentImageView(src: src)
-                .onTapGesture { if let u = click, let link = URL(string: u) { commentURL = link } }
+                .onTapGesture { openComment(click) }
         case .hotComment(let label, let t, let click):
             HStack(spacing: 10) {
                 Text(label).font(.system(size: max(settings.fontSize - 5, 11), weight: .bold)).foregroundStyle(.white)
@@ -303,7 +384,7 @@ struct ReaderView: View {
             .background(RoundedRectangle(cornerRadius: 22).fill(theme.fg.opacity(0.07)))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(theme.fg.opacity(0.12), lineWidth: 0.5))
             .contentShape(Rectangle())
-            .onTapGesture { if let u = click, let link = URL(string: u) { commentURL = link } }
+            .onTapGesture { openComment(click) }
         case .chapterComments(let title, let count, _, let click):
             HStack {
                 Text(title).font(.system(size: settings.fontSize - 2, weight: .bold))
@@ -313,7 +394,7 @@ struct ReaderView: View {
             .padding(.horizontal, 14).padding(.vertical, 12)
             .background(RoundedRectangle(cornerRadius: 16).fill(theme.fg.opacity(0.07)))
             .contentShape(Rectangle())
-            .onTapGesture { if let u = click, let link = URL(string: u) { commentURL = link } }
+            .onTapGesture { openComment(click) }
         }
     }
 
@@ -372,4 +453,18 @@ struct ReaderView: View {
             if let r = try? await WebBook.contentBlocks(source: s, chapter: c, nextChapterUrl: next, book: book) { store.saveContent(c, r.raw) }
         }
     }
+}
+
+
+private struct ScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+private struct ViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

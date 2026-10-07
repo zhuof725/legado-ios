@@ -7,20 +7,15 @@ extension URL: Identifiable { public var id: String { absoluteString } }
 /// 去掉导航栏标题，只保留一个小的「关闭」，让评论页自己的顶栏贴近半屏顶部，与书源在 Android 上的半屏一致。
 struct CommentSheet: View {
     let url: URL
-    var heightFraction: CGFloat = 0.8
-    @Environment(\.dismiss) private var dismiss
+    var heightFraction: CGFloat = 0.6
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            CommentWebView(url: url).ignoresSafeArea(edges: .bottom)
-            Button { dismiss() } label: {
-                Image(systemName: "xmark.circle.fill").font(.system(size: 26)).symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.secondary).padding(10)
-            }
-        }
-        .presentationDetents([.fraction(heightFraction), .large])
-        .presentationDragIndicator(.visible)
-        .modifier(SheetCorner(radius: 20))
+        // 不放额外按钮：下拉或点半屏外侧即可关闭。
+        CommentWebView(url: url)
+            .ignoresSafeArea(edges: .bottom)
+            .presentationDetents([.fraction(heightFraction), .large])
+            .presentationDragIndicator(.visible)
+            .modifier(SheetCorner(radius: 20))
     }
 }
 
