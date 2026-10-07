@@ -42,8 +42,18 @@ enum WebBook {
         let ar = AnalyzeRule(content: body, baseUrl: url, jsLib: source.jsLib, context: context)
         var root: Any? = nil
         if let i = rule.`init`, !i.isEmpty {
-            let initText = ar.getString(i)
-            root = AnalyzeRule.parse(initText, baseUrl: url)
+            // Legado 的 init 既可能是纯文本/JS，也可能是 JSON 对象（如得间 body.bookInfo）。
+            // 先从整页按字段规则取对象；取不到再退回整页 JS/文本。
+            root = ar.getElements(i).first
+            if root == nil {
+                let initText = ar.getString(i)
+                root = AnalyzeRule.parse(initText, baseUrl: url)
+            }
+            if let parsedString = AnalyzeRule.parse(AnalyzeRule.asString(root ?? ""), baseUrl: url) as? [String: Any] {
+                root = parsedString
+            } else if let parsedArray = AnalyzeRule.parse(AnalyzeRule.asString(root ?? ""), baseUrl: url) as? [Any] {
+                root = parsedArray
+            }
         }
         func s(_ r: String?) -> String { ar.getString(r, from: root) }
         let n = s(rule.name); if !n.isEmpty { b.name = n }

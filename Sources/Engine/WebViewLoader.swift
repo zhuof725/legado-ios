@@ -11,7 +11,8 @@ enum WebViewSupport {
     static func isChallenge(_ html: String) -> Bool {
         let head = String(html.prefix(6000))
         let marks = ["<title>Just a moment", "challenges.cloudflare.com", "cf-browser-verification",
-                     "__gatekeeper_challenge", "_cf_chl_opt", "<title>Redirecting...", "Attention Required! | Cloudflare"]
+                     "__gatekeeper_challenge", "_cf_chl_opt", "<title>Redirecting...", "Attention Required! | Cloudflare",
+                     "TCaptcha.js", "__captcha", "WafCaptcha", "captcha.qq.com"]
         return marks.contains { head.contains($0) }
     }
 }
