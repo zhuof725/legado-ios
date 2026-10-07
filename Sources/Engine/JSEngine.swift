@@ -225,7 +225,30 @@ final class JSEngine {
 
     private static let prelude = """
     (function(){var __jp=JSON.parse;JSON.parse=function(s,r){if(s!==null&&typeof s==='object'){return s;}return __jp(String(s),r);};})();
-    var cookie={getCookie:function(){return ''},getKey:function(){return ''},removeCookie:function(){},setCookie:function(){},replaceCookie:function(){}};
+    var cookie={
+        getCookie:function(u){return String(__cookieGet(String(u)));},
+        getKey:function(u,k){return String(__cookieGetKey(String(u),String(k)));},
+        setCookie:function(u,v){return __cookieSet(String(u),v==null?'':String(v));},
+        replaceCookie:function(u,v){return __cookieReplace(String(u),v==null?'':String(v));},
+        removeCookie:function(u){return __cookieRemove(String(u));},
+        cookieToMap:function(v){
+            var parsed=JSON.parse(String(__cookieToMap(v==null?'':String(v))));
+            var map=Object.create(null);
+            Object.keys(parsed).forEach(function(k){map[k]=parsed[k];});
+            return map;
+        },
+        mapToCookie:function(v){
+            if(v==null){return null;}
+            if(typeof v!=='object' || Array.isArray(v)){throw new TypeError('Cookie map must be an object');}
+            var map=Object.create(null);
+            Object.keys(v).forEach(function(k){
+                if(typeof v[k]!=='string'){throw new TypeError('Cookie map values must be strings');}
+                map[k]=v[k];
+            });
+            if(Object.keys(map).length===0){return null;}
+            return String(__cookieFromMap(JSON.stringify(map)));
+        }
+    };
     var cache={get:function(k){return java.storeGet(k)},put:function(k,v){return java.storePut(k,String(v))},getFromMemory:function(k){return java.storeGet(k)},putMemory:function(k,v){return java.storePut(k,String(v))}};
     var source={bookSourceUrl:'',bookSourceName:'',bookSourceComment:'',getKey:function(){return this.bookSourceUrl},getVariable:function(){return java.storeGet('__var_'+this.bookSourceUrl)},setVariable:function(v){java.storePut('__var_'+this.bookSourceUrl,String(v))},put:function(k,v){return java.storePut(k,String(v))},get:function(k){return java.storeGet(k)}};
     var book={name:'',author:'',bookUrl:'',tocUrl:'',getVariable:function(){return ''},setVariable:function(){}};
@@ -287,7 +310,10 @@ final class JSEngine {
         return __response(java.httpGetNative(String(k),JSON.stringify(h||{})),true);
     };
     java.post=function(u,b,h){return __response(java.httpPostNative(String(u),String(b),JSON.stringify(h||{})),true)};
-    java.getCookie=function(u,k){return ''};
+    java.getCookie=function(u,k){
+        if(arguments.length>1 && k!=null){return cookie.getKey(String(u),String(k));}
+        return cookie.getCookie(String(u));
+    };
     java.getString=function(r,c){
         if(arguments.length>1){return String(__ruleGetStringFrom(String(r),c));}
         return String(__ruleGetString(String(r)));
@@ -296,14 +322,75 @@ final class JSEngine {
     java.getElement=function(r){return (typeof __ruleGetElements==='function')?__ruleGetElements(String(r))[0]:null};
     java.getElements=function(r){return (typeof __ruleGetElements==='function')?__ruleGetElements(String(r)):[]};
     java.setContent=function(c){__ruleSetContent(c);result=c};
-    java.getCookie=function(){return ''};
     java.utf8ToGbk=function(s){return s};
     java.t2s=function(s){return s};java.s2t=function(s){return s};
     java.randomUUID=function(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return (c=='x'?r:(r&3|8)).toString(16)})};
     """
 
+    /// Use the injected session's storage; never fall back to the global jar.
+    private func installCookieBindings(_ ctx: JSContext) {
+        let store = SourceCookieStore(storage: session.configuration.httpCookieStorage)
+        func report(_ error: Error) {
+            // Never put cookie values or raw input into exceptions or logs.
+            let message: String
+            switch error as? SourceCookieStore.StoreError {
+            case .invalidURL?: message = "Invalid Cookie URL"
+            case .invalidCookie?: message = "Invalid Cookie input"
+            case .unavailableStorage?: message = "Cookie storage is unavailable"
+            case .storageRejected?: message = "Cookie storage rejected the update"
+            default: message = "Cookie operation failed"
+            }
+            guard let current = JSContext.current() else { return }
+            let exception = JSValue(newErrorFromMessage: message, in: current)
+            exception?.setObject("CookieError", forKeyedSubscript: "name" as NSString)
+            current.exception = exception
+        }
+        let get: @convention(block) (String) -> String = { url in
+            store.getCookie(url)
+        }
+        let getKey: @convention(block) (String, String) -> String = { url, key in
+            store.getKey(url, key)
+        }
+        let set: @convention(block) (String, String) -> Bool = { url, value in
+            do { try store.setCookie(url, value); return true }
+            catch { report(error); return false }
+        }
+        let replace: @convention(block) (String, String) -> Bool = { url, value in
+            do { try store.replaceCookie(url, value); return true }
+            catch { report(error); return false }
+        }
+        let remove: @convention(block) (String) -> Bool = { url in
+            do { try store.removeCookie(url); return true }
+            catch { report(error); return false }
+        }
+        let toMap: @convention(block) (String) -> String = { value in
+            do {
+                let map = try SourceCookieStore.cookieToMap(value)
+                let data = try JSONSerialization.data(withJSONObject: map, options: [.sortedKeys])
+                return String(data: data, encoding: .utf8) ?? "{}"
+            } catch { report(error); return "{}" }
+        }
+        let fromMap: @convention(block) (String) -> String = { json in
+            do {
+                guard let data = json.data(using: .utf8),
+                      let map = try JSONSerialization.jsonObject(with: data) as? [String: String] else {
+                    throw SourceCookieStore.StoreError.invalidCookie
+                }
+                return try SourceCookieStore.mapToCookie(map)
+            } catch { report(error); return "" }
+        }
+        ctx.setObject(get, forKeyedSubscript: "__cookieGet" as NSString)
+        ctx.setObject(getKey, forKeyedSubscript: "__cookieGetKey" as NSString)
+        ctx.setObject(set, forKeyedSubscript: "__cookieSet" as NSString)
+        ctx.setObject(replace, forKeyedSubscript: "__cookieReplace" as NSString)
+        ctx.setObject(remove, forKeyedSubscript: "__cookieRemove" as NSString)
+        ctx.setObject(toMap, forKeyedSubscript: "__cookieToMap" as NSString)
+        ctx.setObject(fromMap, forKeyedSubscript: "__cookieFromMap" as NSString)
+    }
+
     private func makeContext(_ context: RuleContext? = nil) -> JSContext {
         let ctx = JSContext()!
+        installCookieBindings(ctx)
         ctx.exceptionHandler = { _, e in
             let message = e?.toString() ?? "未知脚本异常"
             print("[JS error] \(message)")
