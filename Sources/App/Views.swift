@@ -325,6 +325,7 @@ struct ReaderView: View {
     }
 
     private func start() async {
+        if store.isLocal(book) { await startLocal(); return }
         guard let s = store.source(for: book.origin) else { error = "找不到书源"; loading = false; return }
         index = store.books.first(where: { $0.bookUrl == book.bookUrl })?.durChapterIndex ?? book.durChapterIndex
         if let c = store.cachedToc(book), !c.isEmpty {
@@ -345,6 +346,25 @@ struct ReaderView: View {
         index = readableIndex(from: index, direction: 1) ?? 0
         restorePermille = store.scrollPosition(book) > 0 ? store.scrollPosition(book) : nil
         await loadContent()
+    }
+
+    private func startLocal() async {
+        index = store.books.first(where: { $0.bookUrl == book.bookUrl })?.durChapterIndex ?? book.durChapterIndex
+        guard let toc = store.localToc(book), !toc.isEmpty else { error = "本地书文件已丢失，请重新导入"; loading = false; return }
+        chapters = toc
+        index = min(max(index, 0), toc.count - 1)
+        restorePermille = store.scrollPosition(book) > 0 ? store.scrollPosition(book) : nil
+        loadLocalContent()
+    }
+
+    private func loadLocalContent() {
+        guard index < chapters.count else { return }
+        let c = chapters[index]
+        store.updateProgress(book, index: index, title: c.title)
+        error = nil
+        let raw = store.localContent(book, index: index) ?? ""
+        loading = false
+        if raw.isEmpty { text = "（本章没有内容）"; blocks = [] } else { show(raw: raw) }
     }
 
     /// 记录滚动位置（千分比）。内容还没排好、或正在恢复位置时不记录，避免把 0 写回去覆盖已存的位置。
@@ -507,6 +527,7 @@ struct ReaderView: View {
     }
 
     private func loadContent() async {
+        if store.isLocal(book) { loadLocalContent(); return }
         guard let s = store.source(for: book.origin), index < chapters.count else { return }
         let c = chapters[index]
         store.updateProgress(book, index: index, title: c.title)

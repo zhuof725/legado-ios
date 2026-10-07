@@ -38,6 +38,71 @@ final class AppStore: ObservableObject {
 
     func source(for url: String) -> BookSource? { sources.first { $0.bookSourceUrl == url } }
 
+    // MARK: 本地书
+
+    static let localOrigin = "local"
+    private var localDir: URL {
+        let d = dir.appendingPathComponent("LocalBooks", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+    private func localFolder(_ b: Book) -> URL { localDir.appendingPathComponent(key(b.bookUrl), isDirectory: true) }
+
+    func isLocal(_ b: Book) -> Bool { b.origin == AppStore.localOrigin }
+
+    /// 导入 TXT / EPUB。成功返回加入书架的书；同一文件（内容一致）重复导入会覆盖同一本。
+    @discardableResult
+    func importLocalBook(url: URL) throws -> Book {
+        let ext = url.pathExtension.lowercased()
+        let data = try Data(contentsOf: url)
+        let name = url.lastPathComponent
+        let parsed: LocalBookData
+        switch ext {
+        case "txt", "text": parsed = try LocalBook.parseTXT(data, fileName: name)
+        case "epub": parsed = try LocalBook.parseEPUB(data, fileName: name)
+        default: throw LocalBookError.unsupported(ext)
+        }
+        let id = "local://" + JavaBridge().md5Encode(String(data.count) + parsed.title + (parsed.chapters.first?.text.prefix(200).description ?? ""))
+        var book = Book(bookUrl: id, name: parsed.title, origin: AppStore.localOrigin)
+        book.author = parsed.author
+        book.originName = ext.uppercased() + " 本地"
+        book.lastChapter = parsed.chapters.last?.title
+        book.wordCount = String(parsed.chapters.reduce(0) { $0 + $1.text.count }) + " 字"
+        let folder = localFolder(book)
+        try? FileManager.default.removeItem(at: folder)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var toc: [BookChapter] = []
+        for (i, ch) in parsed.chapters.enumerated() {
+            let u = "\(id)#\(i)"
+            toc.append(BookChapter(url: u, title: ch.title, index: i))
+            try ch.text.write(to: folder.appendingPathComponent("\(i).txt"), atomically: true, encoding: .utf8)
+        }
+        if let cover = parsed.coverData {
+            let f = folder.appendingPathComponent("cover.img")
+            try? cover.write(to: f)
+            book.coverUrl = f.absoluteString
+        }
+        saveLocalToc(book, toc)
+        if let old = books.first(where: { $0.bookUrl == book.bookUrl }) {
+            book.durChapterIndex = old.durChapterIndex; book.durChapterPos = old.durChapterPos; book.durChapterTitle = old.durChapterTitle
+        }
+        addToShelf(book)
+        return book
+    }
+
+    func localToc(_ b: Book) -> [BookChapter]? {
+        guard let d = try? Data(contentsOf: localFolder(b).appendingPathComponent("toc.json")) else { return nil }
+        return try? JSONDecoder().decode([BookChapter].self, from: d)
+    }
+    private func saveLocalToc(_ b: Book, _ toc: [BookChapter]) {
+        if let d = try? JSONEncoder().encode(toc) { try? d.write(to: localFolder(b).appendingPathComponent("toc.json")) }
+    }
+    func localContent(_ b: Book, index: Int) -> String? {
+        try? String(contentsOf: localFolder(b).appendingPathComponent("\(index).txt"), encoding: .utf8)
+    }
+
+    func deleteLocalFiles(_ b: Book) { try? FileManager.default.removeItem(at: localFolder(b)) }
+
     // MARK: Import
     @discardableResult
     func importSources(json text: String) throws -> Int {
@@ -77,7 +142,10 @@ final class AppStore: ObservableObject {
         saveBooks()
     }
 
-    func removeFromShelf(_ b: Book) { books.removeAll { $0.bookUrl == b.bookUrl }; saveBooks() }
+    func removeFromShelf(_ b: Book) {
+        if isLocal(b) { deleteLocalFiles(b) }
+        books.removeAll { $0.bookUrl == b.bookUrl }; saveBooks()
+    }
 
     func updateProgress(_ b: Book, index: Int, title: String?) {
         guard let i = books.firstIndex(where: { $0.bookUrl == b.bookUrl }) else { return }

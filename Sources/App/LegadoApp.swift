@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct LegadoApp: App {
@@ -56,11 +57,13 @@ struct RootView: View {
 
 struct BookshelfView: View {
     @EnvironmentObject var store: AppStore
+    @State private var showImport = false
+    @State private var importMessage: String?
 
     var body: some View {
         List {
             if store.books.isEmpty {
-                Text("书架是空的。先到「书源」导入书源，再去「搜索」找书。")
+                Text("书架是空的。点右上角「+」导入 TXT / EPUB，或先到「书源」导入书源，再去「搜索」找书。")
                     .foregroundStyle(.secondary)
             }
             ForEach(store.books.sorted { $0.lastReadAt > $1.lastReadAt }) { b in
@@ -75,6 +78,40 @@ struct BookshelfView: View {
             }
         }
         .navigationTitle("书架")
+        .toolbar {
+            Button { showImport = true } label: { Image(systemName: "plus") }
+        }
+        .sheet(isPresented: $showImport) {
+            DocumentPicker(contentTypes: BookshelfView.localTypes, allowsMultiple: true, onPick: { urls in
+                showImport = false
+                importLocal(urls)
+            }, onCancel: { showImport = false })
+        }
+        .alert("导入结果", isPresented: Binding(get: { importMessage != nil }, set: { if !$0 { importMessage = nil } })) {
+            Button("好") { importMessage = nil }
+        } message: { Text(importMessage ?? "") }
+    }
+
+    /// TXT 与 EPUB。EPUB 没有系统内置类型时用扩展名声明的类型兜底。
+    static var localTypes: [UTType] {
+        var t: [UTType] = [.plainText, .text]
+        if let epub = UTType(filenameExtension: "epub") { t.append(epub) }
+        t.append(.data)
+        return t
+    }
+
+    private func importLocal(_ urls: [URL]) {
+        var ok = 0
+        var failed: [String] = []
+        for u in urls {
+            let access = u.startAccessingSecurityScopedResource()
+            defer { if access { u.stopAccessingSecurityScopedResource() } }
+            do { try store.importLocalBook(url: u); ok += 1 }
+            catch LocalBookError.unsupported(let ext) { failed.append("\(u.lastPathComponent)：不支持 .\(ext)（目前支持 TXT、EPUB）") }
+            catch LocalBookError.empty { failed.append("\(u.lastPathComponent)：没有读到内容") }
+            catch { failed.append("\(u.lastPathComponent)：文件无法读取或已损坏") }
+        }
+        importMessage = "成功导入 \(ok) 本" + (failed.isEmpty ? "" : "\n\n失败：\n" + failed.joined(separator: "\n"))
     }
 }
 
