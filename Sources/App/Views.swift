@@ -279,9 +279,10 @@ struct ReaderView: View {
     private func blockView(_ block: ContentBlock) -> some View {
         switch block {
         case .paragraph(let t, let count, let url):
-            // 段尾气泡：用行内图标+数字，点击打开评论页；没有评论的段落就是普通文字。
+            // 段尾气泡：数字放在空心圆角气泡里，渲染成图片后接在文字末尾，随文字换行。
+            let size = max(settings.fontSize - 3, 12)
             (Text("\u{3000}\u{3000}" + t)
-                + (count > 0 ? Text("  ") + Text(Image(systemName: "bubble.right.fill")) + Text(" \(count)") : Text("")))
+                + (count > 0 ? Text("  ") + Text(Image(uiImage: CommentBubble.image(count: count, size: size, color: UIColor(theme.fg)))) : Text("")))
                 .font(.system(size: settings.fontSize))
                 .lineSpacing(settings.lineSpacing)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -290,6 +291,29 @@ struct ReaderView: View {
         case .image(let src, let click):
             ContentImageView(src: src)
                 .onTapGesture { if let u = click, let link = URL(string: u) { commentURL = link } }
+        case .hotComment(let label, let t, let click):
+            HStack(spacing: 10) {
+                Text(label).font(.system(size: max(settings.fontSize - 5, 11), weight: .bold)).foregroundStyle(.white)
+                    .padding(.horizontal, 10).padding(.vertical, 3)
+                    .background(Capsule().fill(Color(red: 1, green: 0.27, blue: 0.27)))
+                Text(t).font(.system(size: max(settings.fontSize - 3, 12))).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 22).fill(theme.fg.opacity(0.07)))
+            .overlay(RoundedRectangle(cornerRadius: 22).stroke(theme.fg.opacity(0.12), lineWidth: 0.5))
+            .contentShape(Rectangle())
+            .onTapGesture { if let u = click, let link = URL(string: u) { commentURL = link } }
+        case .chapterComments(let title, let count, _, let click):
+            HStack {
+                Text(title).font(.system(size: settings.fontSize - 2, weight: .bold))
+                Spacer()
+                Text(count).font(.system(size: settings.fontSize - 4)).foregroundStyle(theme.fg.opacity(0.7))
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 16).fill(theme.fg.opacity(0.07)))
+            .contentShape(Rectangle())
+            .onTapGesture { if let u = click, let link = URL(string: u) { commentURL = link } }
         }
     }
 
@@ -333,7 +357,7 @@ struct ReaderView: View {
     /// 缓存里存的是规则输出的原始文本（可能带 <comment>/<img>）；旧缓存是纯文本，同样能解析。
     private func show(raw: String) {
         let parsed = ContentBlocks.parse(raw)
-        let hasRich = parsed.contains { if case .image = $0 { return true }; if case .paragraph(_, let c, _) = $0 { return c > 0 }; return false }
+        let hasRich = parsed.contains { if case .paragraph(_, let c, _) = $0 { return c > 0 }; if case .paragraph = $0 { return false }; return true }
         if hasRich { blocks = parsed; text = "" }
         else { blocks = []; text = WebBook.cleanText(raw) }
     }

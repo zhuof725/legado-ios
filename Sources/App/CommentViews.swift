@@ -82,3 +82,40 @@ struct SVGWebView: UIViewRepresentable {
     }
     func updateUIView(_ uiView: WKWebView, context: Context) { uiView.loadHTMLString(html, baseURL: nil) }
 }
+
+
+/// 段尾评论气泡：空心圆角气泡 + 内部数字，画成 UIImage，便于用 Text(Image) 接在段落文字后面。
+enum CommentBubble {
+    private static var cache: [String: UIImage] = [:]
+
+    static func image(count: Int, size: CGFloat, color: UIColor) -> UIImage {
+        let label = count > 99 ? "99" : String(count)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let key = "\(label)|\(Int(size))|\(Int(r * 255)),\(Int(g * 255)),\(Int(b * 255))"
+        if let hit = cache[key] { return hit }
+        let w = size * 1.7, h = size * 1.35
+        let tail: CGFloat = size * 0.28
+        let canvas = CGSize(width: w + 2, height: h + tail + 2)
+        let renderer = UIGraphicsImageRenderer(size: canvas)
+        let img = renderer.image { _ in
+            let line = max(size * 0.09, 1)
+            let body = CGRect(x: 1 + line / 2, y: 1 + line / 2, width: w - line, height: h - line)
+            let path = UIBezierPath(roundedRect: body, cornerRadius: body.height / 2)
+            // 左下角的小尾巴
+            path.move(to: CGPoint(x: body.minX + body.width * 0.22, y: body.maxY - 1))
+            path.addLine(to: CGPoint(x: body.minX + body.width * 0.12, y: body.maxY + tail))
+            path.addLine(to: CGPoint(x: body.minX + body.width * 0.42, y: body.maxY - 1))
+            color.setStroke()
+            path.lineWidth = line
+            path.stroke()
+            let font = UIFont.systemFont(ofSize: size * 0.62, weight: .semibold)
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+            let text = NSAttributedString(string: label, attributes: attrs)
+            let ts = text.size()
+            text.draw(at: CGPoint(x: body.midX - ts.width / 2, y: body.midY - ts.height / 2))
+        }.withRenderingMode(.alwaysOriginal)
+        cache[key] = img
+        return img
+    }
+}

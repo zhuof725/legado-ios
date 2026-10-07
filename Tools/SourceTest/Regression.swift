@@ -136,6 +136,7 @@ enum RuleRegression {
         try LoginFormRegression.run(check)
         try QimoSourceRegression.run(check)
         ContentBlocksRegression.run(check)
+        CommentCardRegression.run(check)
         SearchRankingRegression.run(check)
         NextUrlRegression.run(check)
         CookieDomainRegression.run(check)

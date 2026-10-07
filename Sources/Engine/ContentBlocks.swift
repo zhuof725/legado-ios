@@ -6,6 +6,16 @@ import Foundation
 enum ContentBlock: Equatable {
     case paragraph(text: String, commentCount: Int, commentURL: String?)
     case image(src: String, clickURL: String?)
+    /// 书源用 SVG 画的「热评」卡片，改用原生卡片显示：label 为红色标签文字，text 为评论内容。
+    case hotComment(label: String, text: String, clickURL: String?)
+    /// 章末「本章说」评论汇总：标题、右侧计数文字，以及若干条 用户名/正文/点赞数。
+    case chapterComments(title: String, count: String, items: [ChapterCommentItem], clickURL: String?)
+}
+
+struct ChapterCommentItem: Equatable {
+    var user: String
+    var text: String
+    var likes: String
 }
 
 enum ContentBlocks {
@@ -53,7 +63,13 @@ enum ContentBlocks {
                 // 图片是独立块：先结束当前段落。
                 flush()
                 if let src = attribute("src", in: tag), !src.isEmpty {
-                    blocks.append(.image(src: stripOptions(src), clickURL: clickURL(in: tag) ?? optionClick(in: src)))
+                    let clean = stripOptions(src)
+                    let click = clickURL(in: tag) ?? optionClick(in: src)
+                    if let svg = svgText(clean), let native = nativeBlock(fromSVG: svg, click: click) {
+                        blocks.append(native)
+                    } else {
+                        blocks.append(.image(src: clean, clickURL: click))
+                    }
                 }
             }
         }
@@ -100,6 +116,54 @@ enum ContentBlocks {
     static func optionClick(in src: String) -> String? {
         guard src.contains(",{") else { return nil }
         return urlInCall(src)
+    }
+
+    // MARK: - SVG 评论卡片 -> 原生块
+
+    /// 解出 data:image/svg+xml 的 SVG 文本；不是 SVG 返回 nil。
+    static func svgText(_ src: String) -> String? {
+        guard src.hasPrefix("data:"), let comma = src.firstIndex(of: ",") else { return nil }
+        let meta = src[..<comma].lowercased()
+        guard meta.contains("svg") else { return nil }
+        let payload = String(src[src.index(after: comma)...])
+        if meta.contains(";base64") {
+            var p = payload.replacingOccurrences(of: "\\s", with: "", options: .regularExpression)
+            while p.count % 4 != 0 { p += "=" }
+            guard let d = Data(base64Encoded: p) else { return nil }
+            return String(data: d, encoding: .utf8)
+        }
+        return payload.removingPercentEncoding
+    }
+
+    private static func xmlUnescape(_ s: String) -> String {
+        var t = s
+        for (e, d) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&apos;", "'"), ("&amp;", "&")] {
+            t = t.replacingOccurrences(of: e, with: d)
+        }
+        return t
+    }
+
+    /// SVG 里所有 <text> 的内容，保持出现顺序。
+    static func svgTexts(_ svg: String) -> [String] {
+        guard let re = try? NSRegularExpression(pattern: "<text\\b[^>]*>([^<]*)</text>", options: [.caseInsensitive]) else { return [] }
+        let ns = svg as NSString
+        return re.matches(in: svg, range: NSRange(location: 0, length: ns.length)).map {
+            xmlUnescape(ns.substring(with: $0.range(at: 1))).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// 识别书源生成的两类评论 SVG：热评（标签+一行）与「本章说」汇总。其他 SVG 返回 nil，仍按图片显示。
+    static func nativeBlock(fromSVG svg: String, click: String?) -> ContentBlock? {
+        let texts = svgTexts(svg)
+        if texts.count == 2, texts[0] == "热评" {
+            return .hotComment(label: texts[0], text: texts[1], clickURL: click)
+        }
+        if texts.count >= 2, texts[0] == "本章说" {
+            // 后面是 用户名、(点赞数 在图形里)、正文行… 的重复；书源把正文按行切成多个 <text>。
+            // 这里只可靠地得到标题和计数；条目不再还原，点击进入评论页查看。
+            return .chapterComments(title: texts[0], count: texts[1], items: [], clickURL: click)
+        }
+        return nil
     }
 
     /// 阅读缓存/兼容用：把块还原成与原来 cleanText 一致的纯文本（评论标记丢弃）。
