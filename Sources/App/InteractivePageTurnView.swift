@@ -31,13 +31,13 @@ struct InteractivePageTurnView: View {
                         .frame(width: width, height: geo.size.height)
                         .offset(x: width + dragX)
                         .shadow(color: .black.opacity(0.24), radius: 9, x: -5, y: 0)
-                        .zIndex(2)
+                        .zIndex(0)
                 } else if style == .slide, dragX > 0, pages.indices.contains(visibleIndex - 1) {
                     pages[visibleIndex - 1]
                         .frame(width: width, height: geo.size.height)
                         .offset(x: -width + dragX)
                         .shadow(color: .black.opacity(0.24), radius: 9, x: 5, y: 0)
-                        .zIndex(2)
+                        .zIndex(0)
                 }
             }
             .frame(width: width, height: geo.size.height)

@@ -234,7 +234,7 @@ struct ReaderView: View {
                     }
                     .onChange(of: loading) { _ in applyRestoreIfReady(proxy: proxy) }
                 }
-                .onTapGesture { withAnimation { showBars.toggle() } }
+                .onTapGesture { showBars.toggle() }
             }
         }
         .navigationTitle(showBars ? book.name : "")
@@ -427,11 +427,11 @@ struct ReaderView: View {
             PageTurnView(pages: renderedPages, current: $pageIndex, style: .curl,
                          background: UIColor(theme.bg),
                          onEdge: { dir in DispatchQueue.main.async { goAcrossEdge(dir) } },
-                         onTapCenter: { withAnimation { showBars.toggle() } })
+                         onTapCenter: { showBars.toggle() })
         } else {
             InteractivePageTurnView(pages: renderedPages, current: $pageIndex, style: turnStyle,
                                    onEdge: { goAcrossEdge($0) },
-                                   onTapCenter: { withAnimation { showBars.toggle() } })
+                                   onTapCenter: { showBars.toggle() })
         }
     }
 
@@ -440,7 +440,7 @@ struct ReaderView: View {
         if pages.isEmpty {
             VStack { if loading { ProgressView() } else if let e = error { Text(e).foregroundStyle(.red) } else { Text("") } }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .onTapGesture { withAnimation { showBars.toggle() } }
+                .onTapGesture { showBars.toggle() }
         } else {
             pageTurnContainer
                 .id("\(settings.pageTurnStyle)-\(pageRevision)-\(index)-\(settings.theme)")
@@ -489,13 +489,19 @@ struct ReaderView: View {
         case .paragraph(let t, let count, let url):
             // 段尾气泡：数字放在空心圆角气泡里，渲染成图片后接在文字末尾，随文字换行。
             let size = max(settings.fontSize - 5, 11)
-            (Text("\u{3000}\u{3000}" + t)
-                + (count > 0 ? Text(" ") + Text(Image(uiImage: CommentBubble.image(count: count, size: size, color: UIColor(theme.fg)))).baselineOffset(-CommentBubble.tailHeight(for: size) * 0.5) : Text("")))
+            Text("\u{3000}\u{3000}" + t)
                 .font(.system(size: settings.fontSize))
                 .lineSpacing(settings.lineSpacing)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture { if count > 0 { openComment(url) } }
+                .overlay(alignment: .trailing) {
+                    if count > 0 {
+                        Button { openComment(url) } label: {
+                            Image(uiImage: CommentBubble.image(count: count, size: size, color: UIColor(theme.fg)))
+                        }
+                        .buttonStyle(.plain)
+                        .contentShape(Rectangle())
+                    }
+                }
         case .inlineBubble:
             EmptyView()
         case .image(let src, let click):

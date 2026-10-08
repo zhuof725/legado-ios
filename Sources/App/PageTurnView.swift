@@ -37,14 +37,20 @@ struct PageContentView: View {
                     switch block {
                     case .paragraph(let t, let count, let url):
                         let size = max(fontSize - 5, 11)
-                        (Text("\u{3000}\u{3000}" + t)
-                            + (count > 0 ? Text(" ") + Text(Image(uiImage: CommentBubble.image(count: count, size: size, color: UIColor(fg)))).baselineOffset(-CommentBubble.tailHeight(for: size) * 0.5) : Text("")))
+                        Text("\u{3000}\u{3000}" + t)
                             .font(.system(size: fontSize))
                             .lineSpacing(lineSpacing)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                            .onTapGesture { if count > 0 { onTapComment(url) } }
+                            .overlay(alignment: .trailing) {
+                                if count > 0 {
+                                    Button { onTapComment(url) } label: {
+                                        Image(uiImage: CommentBubble.image(count: count, size: size, color: UIColor(fg)))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .contentShape(Rectangle())
+                                }
+                            }
                     case .hotComment(let label, let t, let click):
                         HStack(spacing: 10) {
                             Text(label).font(.system(size: max(fontSize - 5, 11), weight: .bold)).foregroundStyle(.white)
