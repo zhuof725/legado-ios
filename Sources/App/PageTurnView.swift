@@ -32,25 +32,16 @@ struct PageContentView: View {
     var body: some View {
         ZStack(alignment: .top) {
             bg.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: lineSpacing + 5) {
+            VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(page.blocks.enumerated()), id: \.offset) { _, block in
                     switch block {
                     case .paragraph(let t, let count, let url):
-                        let size = max(fontSize - 5, 11)
-                        Text("\u{3000}\u{3000}" + t)
-                            .font(.system(size: fontSize))
-                            .lineSpacing(lineSpacing)
-                            .fixedSize(horizontal: false, vertical: true)
+                        InlineCommentParagraph(text: t, count: count,
+                                                fontSize: fontSize,
+                                                lineSpacing: lineSpacing,
+                                                color: UIColor(fg),
+                                                onTap: { onTapComment(url) })
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .overlay(alignment: .trailing) {
-                                if count > 0 {
-                                    Button { onTapComment(url) } label: {
-                                        Image(uiImage: CommentBubble.image(count: count, size: size, color: UIColor(fg)))
-                                    }
-                                    .buttonStyle(.plain)
-                                    .contentShape(Rectangle())
-                                }
-                            }
                     case .hotComment(let label, let t, let click):
                         HStack(spacing: 10) {
                             Text(label).font(.system(size: max(fontSize - 5, 11), weight: .bold)).foregroundStyle(.white)

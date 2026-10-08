@@ -129,3 +129,99 @@ enum CommentBubble {
         return img
     }
 }
+
+
+/// 带行内段评气泡的正文段落。使用 UITextView 让气泡参与正常换行，点击命中附件时才打开评论。
+struct InlineCommentParagraph: UIViewRepresentable {
+    let text: String
+    let count: Int
+    let fontSize: CGFloat
+    let lineSpacing: CGFloat
+    let color: UIColor
+    let onTap: () -> Void
+
+    func makeUIView(context: Context) -> CommentTextView {
+        let view = CommentTextView()
+        view.backgroundColor = .clear
+        view.isEditable = false
+        view.isSelectable = false
+        view.isScrollEnabled = false
+        view.showsVerticalScrollIndicator = false
+        view.showsHorizontalScrollIndicator = false
+        view.textContainerInset = .zero
+        view.textContainer.lineFragmentPadding = 0
+        view.onBubbleTap = onTap
+        return view
+    }
+
+    func updateUIView(_ view: CommentTextView, context: Context) {
+        view.onBubbleTap = onTap
+        view.render(text: text, count: count, fontSize: fontSize, lineSpacing: lineSpacing, color: color)
+    }
+
+    @available(iOS 16.0, *)
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: CommentTextView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width > 0 else { return nil }
+        return CGSize(width: width,
+                      height: ceil(uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height))
+    }
+}
+
+final class CommentTextView: UITextView {
+    var onBubbleTap: (() -> Void)?
+    private var bubbleIndex: Int?
+
+    func render(text: String, count: Int, fontSize: CGFloat, lineSpacing: CGFloat, color: UIColor) {
+        let result = NSMutableAttributedString()
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = lineSpacing
+        style.paragraphSpacing = 0
+        style.alignment = .natural
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: fontSize),
+            .foregroundColor: color,
+            .paragraphStyle: style
+        ]
+        result.append(NSAttributedString(string: "\u{3000}\u{3000}" + text, attributes: attrs))
+        bubbleIndex = nil
+        if count > 0 {
+            result.append(NSAttributedString(string: " ", attributes: attrs))
+            let bubbleSize = max(fontSize - 5, 11)
+            let image = CommentBubble.image(count: count, size: bubbleSize, color: color)
+            let attachment = NSTextAttachment()
+            attachment.image = image
+            attachment.bounds = CGRect(x: 0, y: -CommentBubble.tailHeight(for: bubbleSize) * 0.5,
+                                        width: image.size.width, height: image.size.height)
+            bubbleIndex = result.length
+            result.append(NSAttributedString(attachment: attachment))
+        }
+        attributedText = result
+        textContainerInset = .zero
+        textContainer.lineFragmentPadding = 0
+        invalidateIntrinsicContentSize()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        invalidateIntrinsicContentSize()
+    }
+
+    override var intrinsicContentSize: CGSize {
+        guard bounds.width > 0 else { return CGSize(width: UIView.noIntrinsicMetric, height: 1) }
+        return CGSize(width: UIView.noIntrinsicMetric,
+                      height: ceil(sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height))
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let touch = touches.first, let bubbleIndex {
+            let point = touch.location(in: self)
+            let character = layoutManager.characterIndex(for: point, in: textContainer,
+                                                          fractionOfDistanceBetweenInsertionPoints: nil)
+            if character == bubbleIndex {
+                onBubbleTap?()
+                return
+            }
+        }
+        super.touchesEnded(touches, with: event)
+    }
+}

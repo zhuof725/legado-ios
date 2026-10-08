@@ -175,7 +175,7 @@ struct ReaderView: View {
             } else {
             ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: settings.lineSpacing + 5) {
+                        VStack(alignment: .leading, spacing: 2) {
                             Color.clear.frame(height: 1).id("top")
                                 .background(GeometryReader { g in
                                     Color.clear.preference(key: ScrollOffsetKey.self, value: -g.frame(in: .named("reader")).minY)
@@ -423,15 +423,15 @@ struct ReaderView: View {
 
     @ViewBuilder
     private var pageTurnContainer: some View {
-        if turnStyle == .curl {
-            PageTurnView(pages: renderedPages, current: $pageIndex, style: .curl,
+        if turnStyle == .slide || turnStyle == .curl {
+            PageTurnView(pages: renderedPages, current: $pageIndex, style: turnStyle,
                          background: UIColor(theme.bg),
                          onEdge: { dir in DispatchQueue.main.async { goAcrossEdge(dir) } },
                          onTapCenter: { showBars.toggle() })
         } else {
-            InteractivePageTurnView(pages: renderedPages, current: $pageIndex, style: turnStyle,
-                                   onEdge: { goAcrossEdge($0) },
-                                   onTapCenter: { showBars.toggle() })
+            InteractivePageTurnView(pages: renderedPages, current: $pageIndex, style: .fade,
+                                    onEdge: { goAcrossEdge($0) },
+                                    onTapCenter: { showBars.toggle() })
         }
     }
 
@@ -487,21 +487,12 @@ struct ReaderView: View {
     private func blockView(_ block: ContentBlock) -> some View {
         switch block {
         case .paragraph(let t, let count, let url):
-            // 段尾气泡：数字放在空心圆角气泡里，渲染成图片后接在文字末尾，随文字换行。
-            let size = max(settings.fontSize - 5, 11)
-            Text("\u{3000}\u{3000}" + t)
-                .font(.system(size: settings.fontSize))
-                .lineSpacing(settings.lineSpacing)
+            InlineCommentParagraph(text: t, count: count,
+                                    fontSize: settings.fontSize,
+                                    lineSpacing: settings.lineSpacing,
+                                    color: UIColor(theme.fg),
+                                    onTap: { openComment(url) })
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .overlay(alignment: .trailing) {
-                    if count > 0 {
-                        Button { openComment(url) } label: {
-                            Image(uiImage: CommentBubble.image(count: count, size: size, color: UIColor(theme.fg)))
-                        }
-                        .buttonStyle(.plain)
-                        .contentShape(Rectangle())
-                    }
-                }
         case .inlineBubble:
             EmptyView()
         case .image(let src, let click):
