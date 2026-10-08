@@ -27,11 +27,12 @@ struct PageContentView: View {
     let pageNumber: Int
     let pageCount: Int
     let onTapComment: (String?) -> Void
+    var safeInsets = EdgeInsets()
 
     var body: some View {
         ZStack(alignment: .top) {
             bg.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: lineSpacing + 5) {
                 ForEach(Array(page.blocks.enumerated()), id: \.offset) { _, block in
                     switch block {
                     case .paragraph(let t, let count, let url):
@@ -40,6 +41,7 @@ struct PageContentView: View {
                             + (count > 0 ? Text(" ") + Text(Image(uiImage: CommentBubble.image(count: count, size: size, color: UIColor(fg)))).baselineOffset(-CommentBubble.tailHeight(for: size) * 0.5) : Text("")))
                             .font(.system(size: fontSize))
                             .lineSpacing(lineSpacing)
+                            .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                             .onTapGesture { if count > 0 { onTapComment(url) } }
@@ -80,9 +82,11 @@ struct PageContentView: View {
             }
             .foregroundStyle(fg)
             .padding(.horizontal, 20)
-            .padding(.top, 20)
-            .padding(.bottom, 10)
+            .padding(.top, safeInsets.top + 16)
+            .padding(.bottom, safeInsets.bottom + 10)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .ignoresSafeArea()
     }
 }
 
@@ -102,12 +106,14 @@ struct PageTurnView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIPageViewController {
         let transition: UIPageViewController.TransitionStyle = style == .curl ? .pageCurl : .scroll
-        let vc = UIPageViewController(transitionStyle: transition, navigationOrientation: .horizontal, options: nil)
+        let vc = UIPageViewController(transitionStyle: transition, navigationOrientation: .horizontal, options: style == .curl ? [.spineLocation: UIPageViewController.SpineLocation.min.rawValue] : nil)
         vc.view.backgroundColor = background
         vc.dataSource = style == .fade ? nil : context.coordinator
         vc.delegate = context.coordinator
         if style == .curl { vc.isDoubleSided = false }
+        vc.view.clipsToBounds = true
         context.coordinator.attach(vc)
+        context.coordinator.reloadIfNeeded(pagesCount: pages.count)
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
         tap.delegate = context.coordinator
         vc.view.addGestureRecognizer(tap)
@@ -132,6 +138,7 @@ struct PageTurnView: UIViewControllerRepresentable {
         private var controllers: [Int: UIViewController] = [:]
         private var shownIndex = -1
         private var lastCount = -1
+        private var transitioning = false
 
         init(_ parent: PageTurnView) { self.parent = parent }
 
@@ -141,6 +148,7 @@ struct PageTurnView: UIViewControllerRepresentable {
             guard index >= 0, index < parent.pages.count else { return nil }
             if let c = controllers[index] { return c }
             let host = UIHostingController(rootView: parent.pages[index])
+            if #available(iOS 16.4, *) { host.safeAreaRegions = [] }
             host.view.backgroundColor = parent.background
             host.view.tag = index
             controllers[index] = host
@@ -152,7 +160,7 @@ struct PageTurnView: UIViewControllerRepresentable {
         }
 
         func show(index: Int, animated: Bool, direction: UIPageViewController.NavigationDirection = .forward) {
-            guard let vc, let target = controller(for: index) else { return }
+            guard !transitioning, let vc, let target = controller(for: index) else { return }
             if shownIndex == index, vc.viewControllers?.first === target { return }
             let dir: UIPageViewController.NavigationDirection = index < shownIndex ? .reverse : direction
             shownIndex = index
@@ -162,18 +170,23 @@ struct PageTurnView: UIViewControllerRepresentable {
         // MARK: DataSource（滑动 / 卷页）
         func pageViewController(_ pvc: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
             let i = viewController.view.tag - 1
-            if i < 0 { parent.onEdge(-1); return nil }
+            if i < 0 { return nil }
             return controller(for: i)
         }
         func pageViewController(_ pvc: UIPageViewController, viewControllerAfter viewController: UIViewController) -> UIViewController? {
             let i = viewController.view.tag + 1
-            if i >= parent.pages.count { parent.onEdge(1); return nil }
+            if i >= parent.pages.count { return nil }
             return controller(for: i)
         }
         func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-            guard completed, let i = pvc.viewControllers?.first?.view.tag else { return }
+            transitioning = false
+            guard let i = pvc.viewControllers?.first?.view.tag else { return }
             shownIndex = i
             DispatchQueue.main.async { self.parent.current = i }
+        }
+
+        func pageViewController(_ pvc: UIPageViewController, willTransitionTo pending: [UIViewController]) {
+            transitioning = true
         }
 
         // MARK: 点按 / 淡入淡出
@@ -193,19 +206,27 @@ struct PageTurnView: UIViewControllerRepresentable {
 
         /// 点屏幕两侧翻页；淡入淡出时用交叉淡化，其余用系统动画。
         func go(_ delta: Int) {
+            guard !transitioning else { return }
             let next = shownIndex + delta
             if next < 0 { parent.onEdge(-1); return }
             if next >= parent.pages.count { parent.onEdge(1); return }
             guard let vc, let target = controller(for: next) else { return }
             let dir: UIPageViewController.NavigationDirection = delta > 0 ? .forward : .reverse
-            shownIndex = next
+            transitioning = true
             if parent.style == .fade {
-                UIView.transition(with: vc.view, duration: 0.18, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+                UIView.transition(with: vc.view, duration: 0.18, options: [.transitionCrossDissolve, .allowUserInteraction], animations: {
                     vc.setViewControllers([target], direction: dir, animated: false, completion: nil)
-                }
+                }, completion: { _ in self.completeTurn(next) })
             } else {
-                vc.setViewControllers([target], direction: dir, animated: true, completion: nil)
+                vc.setViewControllers([target], direction: dir, animated: true) { completed in
+                    if completed { self.completeTurn(next) } else { self.transitioning = false }
+                }
             }
+        }
+
+        private func completeTurn(_ next: Int) {
+            shownIndex = next
+            transitioning = false
             DispatchQueue.main.async { self.parent.current = next }
         }
     }

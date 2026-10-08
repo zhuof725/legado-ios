@@ -44,6 +44,8 @@ enum PaginatorRegression {
         check(l.charsPerLine > 10 && l.linesPerPage > 10, "分页：版面估算有合理的行宽和行数")
         let small = Paginator.layout(width: 390, height: 800, fontSize: 14, lineSpacing: 8)
         check(small.charsPerLine > l.charsPerLine && small.linesPerPage > l.linesPerPage, "分页：字号变小每页容纳更多")
+        let inset = Paginator.layout(width: 390, height: 700, fontSize: 19, lineSpacing: 8)
+        check(inset.linesPerPage < l.linesPerPage && inset.linesPerPage > 10, "分页：扣除安全区后每页行数同步减少")
         check(Paginator.blocks(fromPlain: "甲\n\n 乙 \n").count == 2, "分页：纯文本按行成段并去空行")
     }
 }

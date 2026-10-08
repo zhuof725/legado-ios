@@ -146,6 +146,8 @@ struct ReaderView: View {
     @State private var pages: [BookPage] = []
     @State private var pageIndex = 0
     @State private var screenSize: CGSize = .zero
+    @State private var pageInsets = EdgeInsets()
+    @State private var pageRevision = 0
     @State private var pendingEdge: Int?
     @State private var pendingLastPage = false
     @State private var contentHeight: CGFloat = 0
@@ -165,15 +167,15 @@ struct ReaderView: View {
         ZStack {
             theme.bg.ignoresSafeArea()
             GeometryReader { geo in
-                Color.clear.onAppear { screenSize = geo.size }
-                    .onChange(of: geo.size) { screenSize = $0 }
-            }
+                Color.clear.onAppear { updateViewport(geo) }
+                    .onChange(of: geo.size) { _ in updateViewport(geo) }
+            }.ignoresSafeArea().allowsHitTesting(false)
             if settings.pageMode == 1 {
                 pagedBody
             } else {
             ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: settings.lineSpacing + 5) {
                             Color.clear.frame(height: 1).id("top")
                                 .background(GeometryReader { g in
                                     Color.clear.preference(key: ScrollOffsetKey.self, value: -g.frame(in: .named("reader")).minY)
@@ -183,15 +185,8 @@ struct ReaderView: View {
                             }
                             if loading { ProgressView().frame(maxWidth: .infinity) }
                             if let e = error { Text(e).foregroundStyle(.red) }
-                            if blocks.isEmpty {
-                                Text(text)
-                                    .font(.system(size: settings.fontSize))
-                                    .lineSpacing(settings.lineSpacing)
-                                    .textSelection(.enabled)
-                            } else {
-                                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                                    blockView(block)
-                                }
+                            ForEach(Array(readingBlocks.enumerated()), id: \.offset) { _, block in
+                                blockView(block)
                             }
                             if !chapters.isEmpty {
                                 HStack {
@@ -394,13 +389,50 @@ struct ReaderView: View {
     /// 重新分页：字号、行距、屏幕尺寸或内容变化时调用，并回到同一个字符位置。
     private func repaginate(keepOffset: Int? = nil) {
         guard settings.pageMode == 1, screenSize.width > 0 else { return }
-        let source: [ContentBlock] = blocks.isEmpty ? Paginator.blocks(fromPlain: text) : blocks
+        let source = readingBlocks
         guard !source.isEmpty else { pages = []; return }
         let offset = keepOffset ?? (pages.indices.contains(pageIndex) ? pages[pageIndex].startOffset : 0)
-        let layout = Paginator.layout(width: screenSize.width, height: screenSize.height,
+        let layout = Paginator.layout(width: screenSize.width, height: max(screenSize.height - pageInsets.top - pageInsets.bottom, 120),
                                       fontSize: settings.fontSize, lineSpacing: settings.lineSpacing)
         pages = Paginator.paginate(source, layout: layout)
+        pageRevision += 1
         pageIndex = Paginator.pageIndex(containing: offset, in: pages)
+    }
+
+    private var readingBlocks: [ContentBlock] {
+        blocks.isEmpty ? Paginator.blocks(fromPlain: text) : blocks
+    }
+
+    private func updateViewport(_ geo: GeometryProxy) {
+        let window = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).first(where: \.isKeyWindow)
+        let safe = window?.safeAreaInsets ?? .zero
+        pageInsets = EdgeInsets(top: safe.top, leading: safe.left, bottom: safe.bottom, trailing: safe.right)
+        screenSize = geo.size
+    }
+
+    private var renderedPages: [AnyView] {
+        pages.enumerated().map { i, page in
+            AnyView(PageContentView(page: page, fontSize: settings.fontSize,
+                lineSpacing: settings.lineSpacing, fg: theme.fg, bg: theme.bg,
+                title: chapters.indices.contains(index) ? chapters[index].title : "",
+                pageNumber: i + 1, pageCount: pages.count,
+                onTapComment: { openComment($0) }, safeInsets: pageInsets).ignoresSafeArea())
+        }
+    }
+
+    @ViewBuilder
+    private var pageTurnContainer: some View {
+        if turnStyle == .curl {
+            PageTurnView(pages: renderedPages, current: $pageIndex, style: .curl,
+                         background: UIColor(theme.bg),
+                         onEdge: { dir in DispatchQueue.main.async { goAcrossEdge(dir) } },
+                         onTapCenter: { withAnimation { showBars.toggle() } })
+        } else {
+            InteractivePageTurnView(pages: renderedPages, current: $pageIndex, style: turnStyle,
+                                   onEdge: { goAcrossEdge($0) },
+                                   onTapCenter: { withAnimation { showBars.toggle() } })
+        }
     }
 
     @ViewBuilder
@@ -410,25 +442,10 @@ struct ReaderView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onTapGesture { withAnimation { showBars.toggle() } }
         } else {
-            PageTurnView(
-                pages: pages.enumerated().map { i, pg in
-                    AnyView(PageContentView(page: pg, fontSize: settings.fontSize, lineSpacing: settings.lineSpacing,
-                                            fg: theme.fg, bg: theme.bg,
-                                            title: index < chapters.count ? chapters[index].title : "",
-                                            pageNumber: i + 1, pageCount: pages.count,
-                                            onTapComment: { openComment($0) }))
-                },
-                current: $pageIndex,
-                style: turnStyle,
-                background: UIColor(theme.bg),
-                onEdge: { dir in
-                    // 翻过章首/章末：切到上一章末页或下一章首页。
-                    DispatchQueue.main.async { goAcrossEdge(dir) }
-                },
-                onTapCenter: { withAnimation { showBars.toggle() } })
-            .id("\(settings.pageTurnStyle)-\(pages.count)-\(index)-\(Int(settings.fontSize))-\(Int(settings.lineSpacing))-\(settings.theme)")
-            .ignoresSafeArea(edges: .bottom)
-            .onChange(of: pageIndex) { i in recordPage(i) }
+            pageTurnContainer
+                .id("\(settings.pageTurnStyle)-\(pageRevision)-\(index)-\(settings.theme)")
+                .ignoresSafeArea()
+                .onChange(of: pageIndex) { i in recordPage(i) }
         }
     }
 

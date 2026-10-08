@@ -7,7 +7,7 @@ struct PageLayout: Equatable {
     var charsPerLine: Int
     var linesPerPage: Int
     /// 段与段之间折算成的行数。
-    var paragraphGapLines: Double = 0.5
+    var paragraphGapLines: Double = 0.25
     /// 图片/卡片块折算成的行数。
     var cardLines: Double = 2.5
 }
