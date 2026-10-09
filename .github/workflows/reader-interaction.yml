@@ -6,7 +6,7 @@ on:
         description: Test scope
         type: choice
         default: smoke
-        options: [smoke, full]
+        options: [smoke, typography, native, full]
   push:
     branches: [main, fix/source-compat-runtime]
     paths: ['Sources/App/CommentViews.swift', 'Sources/App/Reader*.swift', 'Sources/App/*PageTurn*.swift', 'Sources/App/Views.swift', 'Sources/App/VolumeTitleView.swift', 'Sources/App/ChapterTitleView.swift', 'Sources/Store/ReadSettings.swift', 'Sources/Engine/ChapterNavigation.swift', 'Tools/ReaderInteractionTest/**', '.github/workflows/reader-interaction.yml']
@@ -43,9 +43,12 @@ jobs:
         run: |
           set -o pipefail
           ARGS=()
-          if [ "$TEST_SUITE" != full ]; then
-            ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests -only-testing:ReaderInteractionTests/TypographyTests -only-testing:ReaderInteractionTests/InteractionTests)
-          fi
+          case "$TEST_SUITE" in
+            typography) ARGS=(-only-testing:ReaderInteractionTests/TypographyTests/testNativeCJKColumnsBaselinesAndPagination) ;;
+            native) ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests) ;;
+            full) ;;
+            *) ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests -only-testing:ReaderInteractionTests/TypographyTests -only-testing:ReaderInteractionTests/InteractionTests) ;;
+          esac
           xcodebuild -project Tools/ReaderInteractionTest/ReaderInteraction.xcodeproj \
             -scheme ReaderHarness -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 "${ARGS[@]}" \

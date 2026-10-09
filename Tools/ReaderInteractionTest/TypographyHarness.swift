@@ -77,8 +77,14 @@ private enum TypographyInspection {
         manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(for: view.textContainer)) {
             rect, used, _, glyphs, _ in
             guard glyphs.length > 0 else { return }
-            result.append(Line(glyphs: glyphs, rect: rect, used: used,
-                               baseline: rect.minY + manager.location(forGlyphAt: glyphs.location).y))
+            let character = manager.characterIndexForGlyph(at: glyphs.location)
+            let attachment = view.textStorage.attribute(.attachment, at: character,
+                                                       effectiveRange: nil) as? NSTextAttachment
+            // 附件独占一行时，glyph location 包含 attachment.bounds 的基线位移。
+            // 还原这份位移后才能与普通文字的基线比较，不能把气泡尾巴当成行距误差。
+            let baseline = rect.minY + manager.location(forGlyphAt: glyphs.location).y
+                + (attachment?.bounds.origin.y ?? 0)
+            result.append(Line(glyphs: glyphs, rect: rect, used: used, baseline: baseline))
         }
         return result
     }
