@@ -602,22 +602,13 @@ struct ReaderView: View {
         }
     }
 
-    @ViewBuilder
     private var pageTurnContainer: some View {
-        if turnStyle == .slide || turnStyle == .curl {
-            PageTurnView(pages: renderedPages, current: $pageIndex, style: turnStyle,
-                         background: UIColor(theme.bg),
-                         onEdge: { dir in DispatchQueue.main.async { goAcrossEdge(dir) } },
-                         onTapCenter: { toggleBars() }, contentID: pageContentID,
-                         chapterDirection: pendingChapterDirection,
-                         onContentTransitionCompleted: { pendingEdge = nil; pendingChapterDirection = 0 })
-        } else {
-            InteractivePageTurnView(pages: renderedPages, current: $pageIndex, style: .fade,
-                                    onEdge: { goAcrossEdge($0) },
-                                    onTapCenter: { toggleBars() }, contentID: pageContentID,
-                                    chapterDirection: pendingChapterDirection,
-                                    onContentTransitionCompleted: { pendingEdge = nil; pendingChapterDirection = 0 })
-        }
+        PageTurnView(pages: renderedPages, current: $pageIndex, style: turnStyle,
+                     background: UIColor(theme.bg),
+                     onEdge: { dir in DispatchQueue.main.async { goAcrossEdge(dir) } },
+                     onTapCenter: { toggleBars() }, contentID: pageContentID,
+                     chapterDirection: pendingChapterDirection,
+                     onContentTransitionCompleted: { pendingEdge = nil; pendingChapterDirection = 0 })
     }
 
     @ViewBuilder

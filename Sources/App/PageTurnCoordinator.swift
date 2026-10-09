@@ -4,18 +4,16 @@ import UIKit
 /// 章节更新、手势和原生动画串行处理；动画过程中不替换数据源快照。
 final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIGestureRecognizerDelegate {
     private enum Phase: Equatable { case idle, interactive, animation(UUID), edge(UUID) }
-    private weak var vc: ReaderPageViewController?
+    private weak var vc: UIPageViewController?
     private var applied: PageTurnView
     private var pending: PageTurnView?
     private var phase: Phase = .idle
     private var generation = UUID()
-    private var fronts: [Int: ReaderPageFace] = [:]
-    private var backs: [Int: ReaderPageFace] = [:]
+    private var fronts: [Int: ReaderPageHost] = [:]
     private var retiring: [UIViewController] = []
     private var shownIndex = -1
     private var turnGesture: ChapterTurnGesture?
     private var needsContentSettlement = false
-    private var lastSuppliedBack: ReaderPageFace?
 
     init(_ model: PageTurnView) {
         applied = model
@@ -24,7 +22,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
 
     var isIdle: Bool { phase == .idle && pending == nil }
 
-    func attach(_ controller: ReaderPageViewController) {
+    func attach(_ controller: UIPageViewController) {
         vc = controller
         configureDataSource()
     }
@@ -46,7 +44,6 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
             // UIKit 仍可能保留旧章邻页，清缓存前关闭它们的无障碍树。
             fronts.values.forEach { $0.setAccessibilityVisible(false) }
             fronts.removeAll()
-            backs.removeAll()
             generation = UUID()
             turnGesture = nil
             needsContentSettlement = true
@@ -57,7 +54,6 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         for (index, face) in fronts where model.pages.indices.contains(index) {
             face.updateContent(model.pages[index], background: model.background)
         }
-        backs.values.forEach { $0.setPaperColor(model.background) }
         guard !model.pages.isEmpty else {
             retiring.removeAll()
             finishContentUpdate()
@@ -75,93 +71,48 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
                 animated: chapterAnimated, isContentUpdate: true)
     }
 
-    private func front(_ index: Int) -> ReaderPageFace? {
+    private func front(_ index: Int) -> ReaderPageHost? {
         guard applied.pages.indices.contains(index) else { return nil }
         if let cached = fronts[index] { return cached }
-        let face = ReaderPageFace(index: index, generation: generation,
+        let face = ReaderPageHost(index: index, generation: generation,
                                   content: applied.pages[index], background: applied.background)
         fronts[index] = face
         return face
     }
 
-    private func back(_ index: Int) -> ReaderPageFace {
-        if let cached = backs[index] { return cached }
-        let face = ReaderPageFace(index: index, generation: generation, content: nil, background: applied.background)
-        backs[index] = face
-        return face
+    private func visibleFront() -> ReaderPageHost? {
+        vc?.viewControllers?.first as? ReaderPageHost
     }
 
-    private func suppliedBack(_ index: Int) -> ReaderPageFace {
-        let face = back(index)
-        lastSuppliedBack = face
-        return face
-    }
-
-    private func visibleFront() -> ReaderPageFace? {
-        vc?.viewControllers?.compactMap { $0 as? ReaderPageFace }.first { !$0.isBack }
-    }
-
-    private func controllers(for target: ReaderPageFace, previous: ReaderPageFace?,
-                             direction: UIPageViewController.NavigationDirection,
-                             animated: Bool) -> [UIViewController] {
-        // spine.min 的静态展示只有一个可见正面；纸背仅在双面卷页动画时传入。
-        guard applied.style == .curl, animated, let previous else { return [target] }
-        let paper = direction == .forward ? previous : target
-        let paperBack: ReaderPageFace
-        if paper.generation != generation {
-            paperBack = ReaderPageFace(index: paper.pageIndex, generation: paper.generation,
-                                       content: nil, background: applied.background)
-        } else {
-            paperBack = back(paper.pageIndex)
-        }
-        lastSuppliedBack = paperBack
-        return [target, paperBack]
-    }
-
-    private func exposeOnly(_ visible: ReaderPageFace) {
-        let retained = retiring.compactMap { $0 as? ReaderPageFace }
-        let mounted = vc?.viewControllers?.compactMap { $0 as? ReaderPageFace } ?? []
-        for face in Array(fronts.values) + Array(backs.values) + retained + mounted {
+    private func exposeOnly(_ visible: ReaderPageHost) {
+        let retained = retiring.compactMap { $0 as? ReaderPageHost }
+        let mounted = vc?.viewControllers?.compactMap { $0 as? ReaderPageHost } ?? []
+        for face in Array(fronts.values) + retained + mounted {
             face.setAccessibilityVisible(face === visible)
         }
         visible.setAccessibilityVisible(true)
     }
 
-    private func configureDataSource() {
-        vc?.dataSource = applied.style == .fade ? nil : self
-    }
-
-    #if DEBUG
-    /// 只读最近实际提供给 UIKit 且被加载的纸背；不为探针创建/加载新控制器。
-    /// spine.min 静止时 viewControllers 只包含正面，不能要求纸背也在可见数组内。
-    func debugBackColor() -> UIColor? {
-        guard applied.style == .curl, let face = lastSuppliedBack, face.isViewLoaded else { return nil }
-        return face.view.backgroundColor
-    }
-    #endif
+    private func configureDataSource() { vc?.dataSource = self }
 
     private func install(index: Int, direction: UIPageViewController.NavigationDirection,
                          animated: Bool, isContentUpdate: Bool) {
         guard let vc, let target = front(index) else { finishContentUpdate(); return }
-        let old = visibleFront()
-        let targetPair = controllers(for: target, previous: old, direction: direction, animated: animated)
         let token = UUID()
         let expectedGeneration = generation
         phase = .animation(token)
-        vc.dataSource = nil // 转场期间固定快照，不允许预取旧章/新版式混合页面。
+        vc.dataSource = nil
         if animated { vc.view.isUserInteractionEnabled = false }
-        let finished: (Bool) -> Void = { [weak self, weak vc] _ in
-            // UIKit 可以同步调用静态安装的 completion；退出它的调用栈再更新/纠正页面。
-            DispatchQueue.main.async { [weak self, weak vc] in
+        // 不指定时长、曲线、阴影或纸背，完全使用 UIKit 的原生动画。
+        vc.setViewControllers([target], direction: direction, animated: animated) { [weak self, weak vc] _ in
+            DispatchQueue.main.async {
                 guard let self, let vc, self.phase == .animation(token), self.generation == expectedGeneration else { return }
-                if animated || self.visibleFront() !== target {
-                    // 系统 scroll 会复用旧邻页；动画退出调用栈后静态确认一次目标，清掉旧队列。
-                    // 卷页也移除过渡纸背，但静态复位永远只传一个可见正面。
+                if self.visibleFront() !== target || (animated && self.applied.style == .slide) {
+                    // 原生 scroll 会缓存旧邻页；退出完成回调后静态确认目标，避免跨章旧页残留。
                     vc.setViewControllers([target], direction: direction, animated: false)
                 }
                 self.shownIndex = index
                 self.exposeOnly(target)
-                vc.view.layoutIfNeeded()
                 self.phase = .idle
                 self.retiring.removeAll()
                 vc.view.isUserInteractionEnabled = true
@@ -170,17 +121,6 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
                 if isContentUpdate { self.finishContentUpdate() }
                 DispatchQueue.main.async { [weak self] in self?.drain() }
             }
-        }
-        if animated && applied.style == .fade {
-            vc.recordChapterFadeIfNeeded(from: old, to: target)
-            UIView.transition(with: vc.view, duration: 0.22, options: [.transitionCrossDissolve, .beginFromCurrentState], animations: {
-                vc.setViewControllers(targetPair, direction: direction, animated: false)
-            }, completion: { completed in
-                vc.finishChapterFadeIfNeeded(from: old, to: target)
-                finished(completed)
-            })
-        } else {
-            vc.setViewControllers(targetPair, direction: direction, animated: animated, completion: finished)
         }
     }
 
@@ -205,20 +145,15 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         }
     }
 
-    // 双面纸的连续序列：正面 i → 背面 i → 正面 i+1；背面永不作为阅读页号。
+    // 原生单面阅读页：只提供相邻正文，不插入自制背面或占位页。
     func pageViewController(_ pvc: UIPageViewController, viewControllerAfter controller: UIViewController) -> UIViewController? {
-        guard let face = controller as? ReaderPageFace, face.generation == generation else { return nil }
-        if applied.style != .curl || face.isBack { return front(face.pageIndex + 1) }
-        guard applied.pages.indices.contains(face.pageIndex + 1) else { return nil }
-        return suppliedBack(face.pageIndex)
+        guard let face = controller as? ReaderPageHost, face.generation == generation else { return nil }
+        return front(face.pageIndex + 1)
     }
 
     func pageViewController(_ pvc: UIPageViewController, viewControllerBefore controller: UIViewController) -> UIViewController? {
-        guard let face = controller as? ReaderPageFace, face.generation == generation else { return nil }
-        if applied.style != .curl { return front(face.pageIndex - 1) }
-        if face.isBack { return front(face.pageIndex) }
-        guard applied.pages.indices.contains(face.pageIndex - 1) else { return nil }
-        return suppliedBack(face.pageIndex - 1)
+        guard let face = controller as? ReaderPageHost, face.generation == generation else { return nil }
+        return front(face.pageIndex - 1)
     }
 
     func pageViewController(_ pvc: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
@@ -264,8 +199,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
             gesture.record(translation)
             guard let delta = gesture.direction(translation: translation, velocity: pan.velocity(in: view),
                                                  width: view.bounds.width) else { return }
-            if applied.style == .fade { go(delta) }
-            else if (delta > 0 && shownIndex == applied.pages.count - 1) || (delta < 0 && shownIndex == 0) {
+            if (delta > 0 && shownIndex == applied.pages.count - 1) || (delta < 0 && shownIndex == 0) {
                 requestEdge(delta)
             }
         case .cancelled, .failed:

@@ -10,7 +10,10 @@ enum ReaderTextLayout {
         style.lineSpacing = lineSpacing
         // 一段对应一个 UITextView，段间距由外层 VStack/分页器恰好计算一次。
         style.paragraphSpacing = 0
-        style.alignment = .natural
+        style.alignment = .justified
+        style.lineBreakMode = .byWordWrapping
+        style.headIndent = 0
+        style.tailIndent = 0
         style.firstLineHeadIndent = continuation ? 0 : fontSize * 2
         let attrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: fontSize),

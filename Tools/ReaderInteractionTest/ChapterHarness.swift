@@ -11,15 +11,14 @@ struct ChapterHarnessView: View {
     @State private var chapterDirection = 0
     @State private var edgeLocked = false
     @State private var revision = 0
-    @State private var themeFlipped = false
+    @State private var nativeInfo = "none"
     @State private var slowLoads = 0
     @State private var cachedLoads = 0
-    private var night: Bool { (mode == "curl-night") != themeFlipped }
-    private var background: UIColor { night ? UIColor(white: 0.11, alpha: 1) : .white }
-    private var foreground: Color { night ? .gray : .black }
+    private var background: UIColor { .white }
+    private var foreground: Color { .black }
     private var loadMode: String {
         ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--chapter-load=") }
-            .map { String($0.dropFirst("--chapter-load=".count)) } ?? (mode == "curl-night" ? "cached" : "slow")
+            .map { String($0.dropFirst("--chapter-load=".count)) } ?? "cached"
     }
     private var revisionSuffix: String { revision == 0 ? "" : " · 更新\(revision)" }
 
@@ -60,11 +59,6 @@ struct ChapterHarnessView: View {
                                 .accessibilityIdentifier("program-bottom")
                         }
                     }
-                } else if mode == "fade" {
-                    InteractivePageTurnView(pages: pages, current: $page, style: .fade,
-                                            onEdge: advance, onTapCenter: { bars += 1 },
-                                            contentID: "\(chapter)", chapterDirection: chapterDirection,
-                                            onContentTransitionCompleted: { chapterDirection = 0; edgeLocked = false })
                 } else {
                     PageTurnView(pages: pages, current: $page, style: mode.hasPrefix("curl") ? .curl : .slide,
                                  background: background, onEdge: advance, onTapCenter: { bars += 1 },
@@ -76,15 +70,15 @@ struct ChapterHarnessView: View {
                 if loading { Color.black.opacity(0.02).contentShape(Rectangle()).overlay(ProgressView()) }
             }
             VStack(spacing: 2) {
-                Text("chapter=\(chapter);page=\(page);edges=\(edgeCount);loading=\(loading);bars=\(bars);locked=\(edgeLocked);contentID=\(chapter);count=2;revision=\(revision);night=\(night);load=\(loadMode);slow=\(slowLoads);cached=\(cachedLoads)")
+                Text("chapter=\(chapter);page=\(page);edges=\(edgeCount);loading=\(loading);bars=\(bars);locked=\(edgeLocked);contentID=\(chapter);count=2;revision=\(revision);load=\(loadMode);slow=\(slowLoads);cached=\(cachedLoads)")
                     .font(.system(size: 10)).lineLimit(1).minimumScaleFactor(0.3)
                     .accessibilityIdentifier("chapter-state")
                 HStack {
                     // 不改 contentID、页数、current，也不手动调用生产完成回调。
                     Button("刷新标题/正文") { revision += 1 }.accessibilityIdentifier("refresh-content")
-                    Button("切换主题") { themeFlipped.toggle() }.accessibilityIdentifier("toggle-theme")
+                    Button("检查原生设置") { nativeInfo = NativeReaderInspection.snapshot() }.accessibilityIdentifier("inspect-native")
                 }.font(.caption).disabled(loading || edgeLocked)
-                AnimationProbeControls()
+                Text(nativeInfo).font(.system(size: 7)).accessibilityIdentifier("native-info")
             }.frame(height: 88).background(Color.white)
         }
     }
@@ -115,5 +109,33 @@ struct ChapterHarnessView: View {
         page = direction > 0 ? 0 : 1
         loading = false
         // edgeLocked 只由生产 onContentTransitionCompleted 解除。
+    }
+}
+
+/// 只读一次 UIKit 配置和实际正文属性，不计数动画、不定时轮询、不修改页面。
+private enum NativeReaderInspection {
+    static func snapshot() -> String {
+        func pageController(_ node: UIViewController) -> UIPageViewController? {
+            if let page = node as? UIPageViewController { return page }
+            for child in node.children { if let page = pageController(child) { return page } }
+            return nil
+        }
+        func paragraph(_ node: UIView) -> UITextView? {
+            if let text = node as? CommentTextView { return text }
+            for child in node.subviews { if let text = paragraph(child) { return text } }
+            return nil
+        }
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        guard let root = windows.first(where: \.isKeyWindow)?.rootViewController,
+              let page = pageController(root), let host = page.viewControllers?.first as? ReaderPageHost,
+              let text = paragraph(host.view), let attributed = text.attributedText, attributed.length > 0,
+              let style = attributed.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle else { return "missing" }
+        let continuation = ReaderTextLayout.attributedText(text: "续段", count: 0, fontSize: 19,
+            lineSpacing: 8, color: .black, continuation: true)
+        let continuationStyle = continuation.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        let transition = page.transitionStyle == .pageCurl ? "curl" : "scroll"
+        let native = type(of: page) == UIPageViewController.self
+        let idle = (page.delegate as? PageTurnCoordinator)?.isIdle ?? false
+        return "native=\(native);transition=\(transition);double=\(page.isDoubleSided);idle=\(idle);alignment=\(style.alignment == .justified ? "justified" : "other");indent=\(Int(style.firstLineHeadIndent));continuation=\(Int(continuationStyle?.firstLineHeadIndent ?? -1))"
     }
 }

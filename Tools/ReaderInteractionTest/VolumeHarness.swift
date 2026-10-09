@@ -39,7 +39,7 @@ struct VolumeHarnessView: View {
                 }.id(index)
             } else {
                 PageTurnView(pages: pages, current: $page,
-                    style: mode == "curl" ? .curl : (mode == "fade" ? .fade : .slide),
+                    style: mode == "curl" ? .curl : .slide,
                     background: .white, onEdge: advance, onTapCenter: {},
                     contentID: "\(index)", chapterDirection: chapterDirection,
                     onContentTransitionCompleted: { chapterDirection = 0 })

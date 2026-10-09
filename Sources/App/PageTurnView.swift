@@ -3,15 +3,13 @@ import UIKit
 
 /// 翻页动画类型（设置里选择）。
 enum PageTurnStyle: Int, CaseIterable {
-    case slide = 0   // 平移：页面带阴影侧向滑出
-    case curl = 1    // 卷页：页角卷起（苹果图书）
-    case fade = 2    // 快速淡入淡出
+    case slide = 0   // UIPageViewController.TransitionStyle.scroll
+    case curl = 1    // UIPageViewController.TransitionStyle.pageCurl
 
     var title: String {
         switch self {
         case .slide: return "滑动"
         case .curl: return "卷页"
-        case .fade: return "淡入淡出"
         }
     }
 }
@@ -132,14 +130,13 @@ struct PageTurnView: UIViewControllerRepresentable {
 
     func makeCoordinator() -> PageTurnCoordinator { PageTurnCoordinator(self) }
 
-    func makeUIViewController(context: Context) -> ReaderPageViewController {
+    func makeUIViewController(context: Context) -> UIPageViewController {
         let transition: UIPageViewController.TransitionStyle = style == .curl ? .pageCurl : .scroll
-        let vc = ReaderPageViewController(transitionStyle: transition, navigationOrientation: .horizontal,
+        let vc = UIPageViewController(transitionStyle: transition, navigationOrientation: .horizontal,
             options: style == .curl ? [.spineLocation: UIPageViewController.SpineLocation.min.rawValue] : nil)
         vc.view.backgroundColor = background
-        // 双面纸背由数据源/动画提供；spine.min 初次静态安装只有一个可见正面。
-        // 不在运行中切换单双面，避免系统合成白底镜像纸背。
-        if style == .curl { vc.isDoubleSided = true }
+        // 采用系统默认单面卷页，纸背、折角、阴影及跟手动画全部交给 UIKit。
+        if style == .curl { vc.isDoubleSided = false }
         vc.view.clipsToBounds = true
         vc.delegate = context.coordinator
         context.coordinator.attach(vc)
@@ -160,7 +157,7 @@ struct PageTurnView: UIViewControllerRepresentable {
         return vc
     }
 
-    func updateUIViewController(_ vc: ReaderPageViewController, context: Context) {
+    func updateUIViewController(_ vc: UIPageViewController, context: Context) {
         context.coordinator.update(self)
     }
 }

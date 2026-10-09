@@ -1,9 +1,18 @@
 name: Reader interaction test
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Test scope
+        type: choice
+        default: smoke
+        options: [smoke, full]
   push:
     branches: [main, fix/source-compat-runtime]
     paths: ['Sources/App/CommentViews.swift', 'Sources/App/Reader*.swift', 'Sources/App/*PageTurn*.swift', 'Sources/App/Views.swift', 'Sources/App/VolumeTitleView.swift', 'Sources/App/ChapterTitleView.swift', 'Sources/Store/ReadSettings.swift', 'Sources/Engine/ChapterNavigation.swift', 'Tools/ReaderInteractionTest/**', '.github/workflows/reader-interaction.yml']
+concurrency:
+  group: reader-interaction-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     runs-on: macos-15
@@ -28,12 +37,18 @@ jobs:
         run: |
           xcrun simctl boot "$SIMULATOR_ID" || true
           xcrun simctl bootstatus "$SIMULATOR_ID" -b
-      - name: Test real taps and scroll gestures
+      - name: Test native reader interactions
+        env:
+          TEST_SUITE: ${{ inputs.suite || 'smoke' }}
         run: |
           set -o pipefail
+          ARGS=()
+          if [ "$TEST_SUITE" != full ]; then
+            ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests -only-testing:ReaderInteractionTests/InteractionTests)
+          fi
           xcodebuild -project Tools/ReaderInteractionTest/ReaderInteraction.xcodeproj \
             -scheme ReaderHarness -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
-            -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
+            -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 "${ARGS[@]}" \
             -resultBundlePath reader-interaction.xcresult CODE_SIGNING_ALLOWED=NO test \
             2>&1 | tee reader-interaction.log
       - name: Print crash diagnostics on failure
@@ -61,12 +76,6 @@ jobs:
                               if 'harness' in entry.lower(): report(entry, z.read(entry))
                   except Exception as error: print('diagnostics error', error)
           PY
-      - name: Collect animation frames
-        if: always()
-        run: |
-          mkdir -p turn-frames
-          DATA=$(xcrun simctl get_app_container "$SIMULATOR_ID" io.legado.readerharness data 2>/dev/null || true)
-          if [ -n "$DATA" ]; then cp "$DATA"/Documents/turn-frame-*.png turn-frames/ 2>/dev/null || true; fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -74,4 +83,3 @@ jobs:
           path: |
             reader-interaction.log
             reader-interaction.xcresult
-            turn-frames/

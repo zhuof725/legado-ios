@@ -3,7 +3,6 @@ import XCTest
 final class VolumeInteractionTests: XCTestCase {
     func testSlideKeepsVolumePage() { checkPaged("slide") }
     func testCurlKeepsVolumePage() { checkPaged("curl") }
-    func testFadeKeepsVolumePage() { checkPaged("fade") }
 
     private func checkPaged(_ mode: String) {
         continueAfterFailure = false

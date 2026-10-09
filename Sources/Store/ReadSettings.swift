@@ -12,6 +12,11 @@ final class ReadSettings: ObservableObject {
     @AppStorage("pageMode") var pageMode: Int = 0
     @AppStorage("pageTurnStyle") var pageTurnStyle: Int = 0
 
+    init() {
+        // 旧版淡入淡出值 2 回退到原生滑动，保留字号、主题与阅读进度。
+        if pageTurnStyle != 0 && pageTurnStyle != 1 { pageTurnStyle = 0 }
+    }
+
     var typographyValues: [Double] {
         [fontSize, lineSpacing, paragraphSpacing, leftMargin, rightMargin, topMargin, bottomMargin]
     }
