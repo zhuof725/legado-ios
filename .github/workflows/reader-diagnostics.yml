@@ -1,9 +1,11 @@
 name: Reader crash diagnostics
 on:
   workflow_dispatch:
-  push:
-    branches: [fix/source-compat-runtime]
-    paths: ['.github/workflows/reader-diagnostics.yml']
+    inputs:
+      run_id:
+        description: Reader interaction run containing the failed xcresult
+        required: true
+        default: '37958478211'
 permissions:
   actions: read
   contents: read
@@ -15,7 +17,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: reader-interaction-results
-          run-id: 37943319805
+          run-id: ${{ inputs.run_id }}
           github-token: ${{ github.token }}
       - name: Export simulator diagnostics
         run: |
