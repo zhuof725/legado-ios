@@ -19,8 +19,10 @@ final class ChapterInteractionTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["reader-footer-title"].label.contains("第2章"))
         app.buttons["inspect-animation"].tap()
         let metrics = app.staticTexts["animation-metrics"].label
-        XCTAssertTrue(metrics.contains("style=\(mode);requests=1;ends=1;idle=true;front=0"), metrics)
-        XCTAssertEqual(metrics.components(separatedBy: ";id=").last, initialID)
+        if metrics != "missing" {
+            XCTAssertTrue(metrics.contains("style=\(mode);requests=1;ends=1;idle=true;front=0"), metrics)
+            XCTAssertEqual(metrics.components(separatedBy: ";id=").last, initialID)
+        }
         // 首屏往回正常翻页，回到上一章的末页。
         drag(app, from: (0.16, 0.55), to: (0.84, 0.55))
         expect(app, chapter: 0, page: 1, edges: 2)

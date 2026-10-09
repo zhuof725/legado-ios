@@ -137,7 +137,9 @@ struct PageTurnView: UIViewControllerRepresentable {
         let vc = ReaderPageViewController(transitionStyle: transition, navigationOrientation: .horizontal,
             options: style == .curl ? [.spineLocation: UIPageViewController.SpineLocation.min.rawValue] : nil)
         vc.view.backgroundColor = background
-        if style == .curl { vc.isDoubleSided = true }
+        // pageCurl + spine.min + 双面时，UIKit 要求 setViewControllers 传入正面和背面。
+        // Coordinator 的首次安装会传入一对显式的主题色纸面，避免系统生成镜像白背。
+        if style == .curl { vc.isDoubleSided = false }
         vc.view.clipsToBounds = true
         vc.delegate = context.coordinator
         context.coordinator.attach(vc)

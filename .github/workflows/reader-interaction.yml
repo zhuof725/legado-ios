@@ -31,6 +31,27 @@ jobs:
             -scheme ReaderHarness -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -resultBundlePath reader-interaction.xcresult CODE_SIGNING_ALLOWED=NO test \
             2>&1 | tee reader-interaction.log
+      - name: Print crash diagnostics on failure
+        if: failure()
+        run: |
+          set +e
+          xcrun xcresulttool export diagnostics --path reader-interaction.xcresult --output-path diagnostics >/dev/null 2>&1
+          find diagnostics -type f \( -name '*.ips' -o -name '*.crash' -o -name '*.txt' \) -maxdepth 4 2>/dev/null | head -20
+          python3 - <<'PY'
+          import glob,zipfile,os
+          for z in glob.glob('diagnostics/**/*.zip',recursive=True):
+              try:
+                  with zipfile.ZipFile(z) as f:
+                      for n in f.namelist():
+                          if 'harness' in n.lower():
+                              data=f.read(n)
+                              if len(data)<3000000:
+                                  text=data.decode('utf-8','replace')
+                                  for line in text.splitlines():
+                                      if any(k in line.lower() for k in ['exception','reason:','assert','abort','fatal','uncaught','invalid']):
+                                          print('CRASH>',line[:1400])
+              except Exception as e: print('zip-err',e)
+          PY
       - name: Collect animation frames
         if: always()
         run: |

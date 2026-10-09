@@ -117,7 +117,9 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
                          animated: Bool, isContentUpdate: Bool) {
         guard let vc, let target = front(index) else { finishContentUpdate(); return }
         let old = visibleFront()
-        let targetPair = pair(for: target, previous: old)
+        let initialCurl = applied.style == .curl && old == nil && (vc.viewControllers?.isEmpty ?? true)
+        let targetPair = initialCurl ? [target] : pair(for: target, previous: old)
+        if initialCurl { vc.isDoubleSided = false }
         let token = UUID()
         let expectedGeneration = generation
         phase = .animation(token)
@@ -127,7 +129,8 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
             guard let self, let vc, self.phase == .animation(token), self.generation == expectedGeneration else { return }
             // false 只表示动画被跳过。以当前目标为准，静态收尾后也必须解锁。
             if self.applied.style == .curl {
-                // 动画结束后背面换回目标纸张自己的背面，不能让旧 generation 留在数据源链上。
+                // 双面模式下 spine.min 必须传正面+背面；首次初始化先单面，完成后再切双面。
+                vc.isDoubleSided = true
                 vc.setViewControllers([target, self.back(index)], direction: direction, animated: false)
             } else if self.visibleFront() !== target || !completed {
                 vc.setViewControllers(targetPair, direction: direction, animated: false)
@@ -155,7 +158,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
     }
 
     private func publishCurrent(_ index: Int, for expected: UUID) {
-        let model = applied
+        var model = applied
         DispatchQueue.main.async { [weak self] in
             guard let self, self.generation == expected,
                   self.pending == nil || self.pending?.contentID == model.contentID else { return }
@@ -175,21 +178,15 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         }
     }
 
-    // 正面 p → 背面 p → 正面 p+1；背面永不提交为阅读页号。
+    // 双面卷页：dataSource 只返回正面；UIKit 自行用“先前显示页的背面”完成配对。
     func pageViewController(_ pvc: UIPageViewController, viewControllerAfter controller: UIViewController) -> UIViewController? {
-        guard let face = controller as? ReaderPageFace, face.generation == generation else { return nil }
-        if applied.style != .curl { return front(face.pageIndex + 1) }
-        if face.isBack { return front(face.pageIndex + 1) }
-        guard face.pageIndex + 1 < applied.pages.count else { return nil }
-        return back(face.pageIndex)
+        guard let face = controller as? ReaderPageFace, !face.isBack, face.generation == generation else { return nil }
+        return front(face.pageIndex + 1)
     }
 
     func pageViewController(_ pvc: UIPageViewController, viewControllerBefore controller: UIViewController) -> UIViewController? {
-        guard let face = controller as? ReaderPageFace, face.generation == generation else { return nil }
-        if applied.style != .curl { return front(face.pageIndex - 1) }
-        if face.isBack { return front(face.pageIndex) }
-        guard face.pageIndex > 0 else { return nil }
-        return back(face.pageIndex - 1)
+        guard let face = controller as? ReaderPageFace, !face.isBack, face.generation == generation else { return nil }
+        return front(face.pageIndex - 1)
     }
 
     func pageViewController(_ pvc: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {

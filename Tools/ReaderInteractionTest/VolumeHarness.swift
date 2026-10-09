@@ -9,6 +9,7 @@ struct VolumeHarnessView: View {
     ]
     @State private var index = 0
     @State private var page = 0
+    @State private var chapterDirection = 0
 
     private var pages: [AnyView] {
         let chapter = chapters[index]
@@ -39,7 +40,9 @@ struct VolumeHarnessView: View {
             } else {
                 PageTurnView(pages: pages, current: $page,
                     style: mode == "curl" ? .curl : (mode == "fade" ? .fade : .slide),
-                    background: .white, onEdge: advance, onTapCenter: {}).id(index)
+                    background: .white, onEdge: advance, onTapCenter: {},
+                    contentID: "\(index)", chapterDirection: chapterDirection,
+                    onContentTransitionCompleted: { chapterDirection = 0 }).id("volume-\(chapterDirection == 0 ? 0 : 1)")
             }
             Text("entry=\(index);volume=\(chapters[index].isVolume)")
                 .accessibilityIdentifier("volume-state")
@@ -50,5 +53,6 @@ struct VolumeHarnessView: View {
             direction: direction, chapters: chapters) else { return }
         index = target
         page = 0
+        chapterDirection = direction
     }
 }

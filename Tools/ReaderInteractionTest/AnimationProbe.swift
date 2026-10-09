@@ -17,9 +17,10 @@ enum AnimationProbe {
     static func snapshotMetrics() -> String {
         guard let page = controller() else { return "missing" }
         let front = page.viewControllers?.compactMap { $0 as? ReaderPageFace }.first { !$0.isBack }
-        let isIdle = (page.delegate as? PageTurnCoordinator)?.isIdle ?? false
+        let coordinator = page.delegate as? PageTurnCoordinator
+        let isIdle = coordinator?.isIdle ?? false
         #if DEBUG
-        let color = (page.delegate as? PageTurnCoordinator)?.debugBackColor()
+        let color = coordinator?.debugBackColor()
         #else
         let color: UIColor? = nil
         #endif
