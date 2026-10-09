@@ -16,6 +16,12 @@ struct BookPage: Equatable {
     var blocks: [ContentBlock]
     /// 这一页第一个字在整章里的字符偏移（用于改字号后回到同一位置）。
     var startOffset: Int
+    /// 这些块是长段落的续段，渲染时不再添加段首缩进。
+    /// 下标对应 blocks；普通段落和 Engine 分页器默认都是空集合。
+    var continuationIndices: Set<Int> = []
+    /// UIKit 分页器测得的块高度，单位为点；下标对应 blocks。
+    /// Engine 分页器不填此字段，保留它不会让 portable paginator 依赖 UIKit。
+    var blockHeights: [Double] = []
 }
 
 enum Paginator {

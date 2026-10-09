@@ -33,13 +33,15 @@ struct PageContentView: View {
         ZStack(alignment: .top) {
             bg.ignoresSafeArea()
             VStack(alignment: .leading, spacing: 2) {
-                ForEach(Array(page.blocks.enumerated()), id: \.offset) { _, block in
+                ForEach(Array(page.blocks.enumerated()), id: \.offset) { blockIndex, block in
                     switch block {
                     case .paragraph(let t, let count, let url):
+                        let continuation = page.continuationIndices.contains(blockIndex)
                         InlineCommentParagraph(text: t, count: count,
                                                 fontSize: fontSize,
                                                 lineSpacing: lineSpacing,
                                                 color: UIColor(fg),
+                                                continuation: continuation,
                                                 onTap: { onTapComment(url) })
                             .frame(maxWidth: .infinity, alignment: .leading)
                     case .hotComment(let label, let t, let click):

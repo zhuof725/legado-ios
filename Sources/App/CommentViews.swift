@@ -3,8 +3,7 @@ import WebKit
 
 extension URL: Identifiable { public var id: String { absoluteString } }
 
-/// 段评/章评：用 WebView 打开书源给的评论页（半屏，默认约 80% 屏高，可拖到全屏）。
-/// 去掉导航栏标题，只保留一个小的「关闭」，让评论页自己的顶栏贴近半屏顶部，与书源在 Android 上的半屏一致。
+/// 段评/章评固定为屏高 60%；上划滚动网页，下拉仍可关闭。
 struct CommentSheet: View {
     let url: URL
     var heightFraction: CGFloat = 0.6
@@ -13,8 +12,9 @@ struct CommentSheet: View {
         // 不放额外按钮：下拉或点半屏外侧即可关闭。
         CommentWebView(url: url)
             .ignoresSafeArea(edges: .bottom)
-            .presentationDetents([.fraction(heightFraction), .large])
-            .presentationDragIndicator(.visible)
+            // 只有一个半屏 detent：网页上划只滚动评论内容，不把弹窗展开到全屏。
+            .presentationDetents([.fraction(heightFraction)])
+            .presentationDragIndicator(.hidden)
             .modifier(SheetCorner(radius: 20))
     }
 }
@@ -23,7 +23,11 @@ struct CommentSheet: View {
 private struct SheetCorner: ViewModifier {
     let radius: CGFloat
     func body(content: Content) -> some View {
-        if #available(iOS 16.4, *) { content.presentationCornerRadius(radius) } else { content }
+        if #available(iOS 16.4, *) {
+            content.presentationCornerRadius(radius).presentationContentInteraction(.scrolls)
+        } else {
+            content
+        }
     }
 }
 
@@ -138,32 +142,37 @@ struct InlineCommentParagraph: UIViewRepresentable {
     let fontSize: CGFloat
     let lineSpacing: CGFloat
     let color: UIColor
+    let continuation: Bool
     let onTap: () -> Void
 
+    init(text: String, count: Int, fontSize: CGFloat, lineSpacing: CGFloat,
+         color: UIColor, continuation: Bool = false, onTap: @escaping () -> Void) {
+        self.text = text
+        self.count = count
+        self.fontSize = fontSize
+        self.lineSpacing = lineSpacing
+        self.color = color
+        self.continuation = continuation
+        self.onTap = onTap
+    }
+
     func makeUIView(context: Context) -> CommentTextView {
-        let view = CommentTextView()
-        view.backgroundColor = .clear
-        view.isEditable = false
-        view.isSelectable = false
-        view.isScrollEnabled = false
-        view.showsVerticalScrollIndicator = false
-        view.showsHorizontalScrollIndicator = false
-        view.textContainerInset = .zero
-        view.textContainer.lineFragmentPadding = 0
+        let view = ReaderTextLayout.makeTextView()
+        ReaderTextLayout.configure(view)
         view.onBubbleTap = onTap
         return view
     }
 
     func updateUIView(_ view: CommentTextView, context: Context) {
         view.onBubbleTap = onTap
-        view.render(text: text, count: count, fontSize: fontSize, lineSpacing: lineSpacing, color: color)
+        view.render(text: text, count: count, fontSize: fontSize, lineSpacing: lineSpacing,
+                    color: color, continuation: continuation)
     }
 
     @available(iOS 16.0, *)
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: CommentTextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width > 0 else { return nil }
-        return CGSize(width: width,
-                      height: ceil(uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height))
+        return CGSize(width: width, height: ReaderTextLayout.height(of: uiView, width: width))
     }
 }
 
@@ -172,33 +181,15 @@ final class CommentTextView: UITextView {
     private var bubbleIndex: Int?
     private var lastRenderKey: String?
 
-    func render(text: String, count: Int, fontSize: CGFloat, lineSpacing: CGFloat, color: UIColor) {
-        let key = "\(text)|\(count)|\(fontSize)|\(lineSpacing)|\(color)"
+    func render(text: String, count: Int, fontSize: CGFloat, lineSpacing: CGFloat,
+                color: UIColor, continuation: Bool = false) {
+        let key = "\(text)|\(count)|\(fontSize)|\(lineSpacing)|\(continuation)|\(color)"
         guard key != lastRenderKey else { return }
         lastRenderKey = key
-        let result = NSMutableAttributedString()
-        let style = NSMutableParagraphStyle()
-        style.lineSpacing = lineSpacing
-        style.paragraphSpacing = 0
-        style.alignment = .natural
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: UIFont.systemFont(ofSize: fontSize),
-            .foregroundColor: color,
-            .paragraphStyle: style
-        ]
-        result.append(NSAttributedString(string: "\u{3000}\u{3000}" + text, attributes: attrs))
-        bubbleIndex = nil
-        if count > 0 {
-            result.append(NSAttributedString(string: " ", attributes: attrs))
-            let bubbleSize = max(fontSize - 5, 11)
-            let image = CommentBubble.image(count: count, size: bubbleSize, color: color)
-            let attachment = NSTextAttachment()
-            attachment.image = image
-            attachment.bounds = CGRect(x: 0, y: -CommentBubble.tailHeight(for: bubbleSize) * 0.5,
-                                        width: image.size.width, height: image.size.height)
-            bubbleIndex = result.length
-            result.append(NSAttributedString(attachment: attachment))
-        }
+        let result = ReaderTextLayout.attributedText(text: text, count: count,
+                                                      fontSize: fontSize, lineSpacing: lineSpacing,
+                                                      color: color, continuation: continuation)
+        bubbleIndex = count > 0 ? result.length - 1 : nil
         attributedText = result
         textContainerInset = .zero
         textContainer.lineFragmentPadding = 0

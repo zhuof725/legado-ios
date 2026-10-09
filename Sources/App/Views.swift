@@ -453,9 +453,13 @@ struct ReaderView: View {
         let source = readingBlocks
         guard !source.isEmpty else { pages = []; return }
         let offset = keepOffset ?? (pages.indices.contains(pageIndex) ? pages[pageIndex].startOffset : 0)
-        let layout = Paginator.layout(width: screenSize.width, height: max(screenSize.height - pageInsets.top - pageInsets.bottom, 120),
-                                      fontSize: settings.fontSize, lineSpacing: settings.lineSpacing)
-        pages = Paginator.paginate(source, layout: layout)
+        let configuration = ReaderPaginator.Configuration(
+            pageSize: screenSize,
+            safeInsets: UIEdgeInsets(top: pageInsets.top, left: pageInsets.leading,
+                                     bottom: pageInsets.bottom, right: pageInsets.trailing),
+            fontSize: CGFloat(settings.fontSize),
+            lineSpacing: CGFloat(settings.lineSpacing))
+        pages = ReaderPaginator.paginate(source, configuration: configuration)
         pageRevision += 1
         pageIndex = Paginator.pageIndex(containing: offset, in: pages)
     }
