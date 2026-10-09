@@ -37,7 +37,7 @@ enum ReaderTextLayout {
         let storage = NSTextStorage()
         let manager = NSLayoutManager()
         storage.addLayoutManager(manager)
-        let container = NSTextContainer(size: CGSize(width: 0, height: .greatestFiniteMagnitude))
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         container.lineFragmentPadding = 0
         manager.addTextContainer(container)
         return CommentTextView(frame: .zero, textContainer: container)
