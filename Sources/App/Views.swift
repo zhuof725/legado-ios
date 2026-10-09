@@ -679,15 +679,9 @@ struct ReaderView: View {
         store.updateProgress(book, index: index, title: chapters[index].title)
         recordPage(page)
         // 只有 UIKit 确认提交才写入章号；取消手势不会来到这里。
-        if prepared.configuration != pageConfiguration(for: index) {
-            let expectedID = prepared.contentID
-            DispatchQueue.main.async {
-                guard pageContentID == expectedID else { return }
-                repaginate(keepOffset: prepared.pages[page].startOffset)
-            }
-        } else {
-            prepareNearbyChapters()
-        }
+        // 若手势中版式改变，必须先让容器收到原快照 ID 的接纳，再由完成回调重排；
+        // 单纯 main.async 可能被 SwiftUI 合并，导致容器一直等不到接纳 ID。
+        if prepared.configuration == pageConfiguration(for: index) { prepareNearbyChapters() }
         if let source = store.source(for: book.origin) { prefetch(source) }
     }
 
@@ -744,7 +738,12 @@ struct ReaderView: View {
                      onEdge: { dir in DispatchQueue.main.async { goAcrossEdge(dir) } },
                      onTapCenter: { toggleBars() }, contentID: pageContentID,
                      chapterDirection: pendingChapterDirection,
-                     onContentTransitionCompleted: { pendingEdge = nil; pendingChapterDirection = 0 },
+                     onContentTransitionCompleted: {
+                         pendingEdge = nil
+                         pendingChapterDirection = 0
+                         if let current = preparedChapters[index], current.contentID == pageContentID,
+                            current.configuration != pageConfiguration(for: index) { repaginate() }
+                     },
                      previousChapter: pageTurnChapter(previous),
                      nextChapter: pageTurnChapter(next),
                      onChapterTransition: { direction, page in

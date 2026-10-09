@@ -30,7 +30,6 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
     private var interactionOrigin: Key?
     private var adoption: Adoption?
     private var turnGesture: ChapterTurnGesture?
-    private var publication = UUID()
     private var needsContentSettlement = false
 
     init(_ model: PageTurnView) {
@@ -64,7 +63,6 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
     private func drain() {
         guard phase == .idle, let model = pending, let vc else { return }
         pending = nil
-        publication = UUID()
         let oldFront = visibleFront()
         let oldOrder = order
         let oldGenerations = snapshots.mapValues { $0.generation }
@@ -219,7 +217,6 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         guard let vc, let pair = controllers(for: target, turningFrom: animated ? shown : nil) else { finishContentUpdate(); return }
         let token = UUID()
         let origin = shown
-        publication = UUID()
         phase = .animation(token)
         vc.dataSource = nil
         vc.view.isUserInteractionEnabled = false
@@ -267,8 +264,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         guard phase == .idle, adoption == nil, shown == target, valid(target),
               target.contentID == applied.contentID,
               pending == nil || pending?.contentID == target.contentID else { return }
-        var model = applied
-        if model.current != target.index { model.current = target.index }
+        if applied.current != target.index { applied.current = target.index }
     }
 
     private func finishContentUpdate() {
@@ -289,7 +285,6 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         let direction = to > from ? 1 : -1
         let token = UUID()
         let callback = applied.onChapterTransition // 与这次手势的冻结快照配对，而非 pending 的闭包。
-        publication = UUID()
         pending = nil
         turnGesture = nil
         adoption = Adoption(token: token, target: target)
@@ -319,7 +314,6 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
     func pageViewController(_ pvc: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
         guard phase == .idle || phase == .tracking else { return }
         interactionOrigin = shown
-        publication = UUID()
         phase = .interactive(UUID())
         turnGesture = nil // 一次手势只提交一页；倒二→末页不额外触发章末兜底。
     }
@@ -374,7 +368,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
     @objc func panned(_ pan: UIPanGestureRecognizer) {
         switch pan.state {
         case .began:
-            if phase == .idle { phase = .tracking; publication = UUID() }
+            if phase == .idle { phase = .tracking }
             turnGesture?.record(pan.translation(in: pan.view))
         case .changed:
             turnGesture?.record(pan.translation(in: pan.view))
@@ -443,7 +437,6 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         guard phase == .idle, let vc, let requested = shown, valid(requested), step(requested, delta) == nil else { return }
         let token = UUID()
         phase = .edge(token)
-        publication = UUID()
         turnGesture = nil
         let deliver: () -> Void = { [weak self, weak vc] in
             guard let self, let vc, self.phase == .edge(token), self.shown == requested, self.valid(requested) else { return }

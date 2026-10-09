@@ -36,8 +36,8 @@ enum ReaderTextLayout {
             let cjk = (UIFont(name: CTFontCopyPostScriptName(fallback) as String, size: size) ?? body)
             // 仅中文使用全宽字形，关闭标点的比例宽度；不把西文/emoji 变成等宽字体。
             let descriptor = cjk.fontDescriptor.addingAttributes([
-                .featureSettings: [[UIFontDescriptor.FeatureKey.typeIdentifier: kTextSpacingType,
-                                    UIFontDescriptor.FeatureKey.selectorIdentifier: kMonospacedTextSelector]]
+                .featureSettings: [[UIFontDescriptor.FeatureKey.type: kTextSpacingType,
+                                    UIFontDescriptor.FeatureKey.selector: kMonospacedTextSelector]]
             ])
             let fullWidth = UIFont(descriptor: descriptor, size: size)
             let emoji = UIFont(name: "AppleColorEmoji", size: size) ?? body
