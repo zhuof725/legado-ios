@@ -2,8 +2,8 @@ name: Reader interaction test
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    paths: ['Sources/App/CommentViews.swift', 'Tools/ReaderInteractionTest/**']
+    branches: [main, fix/source-compat-runtime]
+    paths: ['Sources/App/CommentViews.swift', 'Sources/App/ReaderTextLayout.swift', 'Tools/ReaderInteractionTest/**', '.github/workflows/reader-interaction.yml']
 jobs:
   test:
     runs-on: macos-15
