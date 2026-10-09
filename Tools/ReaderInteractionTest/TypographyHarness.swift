@@ -200,7 +200,7 @@ private enum TypographyInspection {
         ReaderTextLayout.configure(reference)
         reference.attributedText = NSAttributedString(string: latin, attributes: [.font: UIFont.systemFont(ofSize: 19)])
         reference.frame = CGRect(x: 0, y: 0, width: 700, height: 100)
-        reference.textContainer.size = CGSize(width: 700, height: .greatestFiniteMagnitude)
+        reference.textContainer.size = CGSize(width: 700, height: CGFloat.greatestFiniteMagnitude)
         reference.layoutManager.ensureLayout(for: reference.textContainer)
         let actualManager = view.layoutManager, referenceManager = reference.layoutManager
         var shapingError: CGFloat = 0
