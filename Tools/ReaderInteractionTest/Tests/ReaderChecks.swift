@@ -62,11 +62,14 @@ struct ReaderObservation {
     func sameLayout(as old: ReaderObservation) -> Bool {
         guard titles.count == 1, numbers.count == 1, old.titles.count == 1, old.numbers.count == 1,
               controllerID == old.controllerID, faceID == old.faceID else { return false }
-        return zip([titles[0], numbers[0]], [old.titles[0], old.numbers[0]]).allSatisfy { a, b in
-            a.text == b.text && abs(a.frame.minX - b.frame.minX) <= 0.5
-                && abs(a.frame.minY - b.frame.minY) <= 0.5
-                && abs(a.frame.width - b.frame.width) <= 0.5 && abs(a.frame.height - b.frame.height) <= 0.5
-        }
+        return sameFooter(titles[0], old.titles[0]) && sameFooter(numbers[0], old.numbers[0])
+    }
+    private func sameFooter(_ a: Footer, _ b: Footer) -> Bool {
+        guard a.text == b.text else { return false }
+        guard abs(a.frame.minX - b.frame.minX) <= CGFloat(0.5) else { return false }
+        guard abs(a.frame.minY - b.frame.minY) <= CGFloat(0.5) else { return false }
+        guard abs(a.frame.width - b.frame.width) <= CGFloat(0.5) else { return false }
+        return abs(a.frame.height - b.frame.height) <= CGFloat(0.5)
     }
 }
 

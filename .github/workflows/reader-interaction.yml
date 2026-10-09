@@ -10,8 +10,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install XcodeGen and diagnostic tools
+        run: brew install xcodegen ripgrep
       - name: Generate focused test project
         run: cd Tools/ReaderInteractionTest && xcodegen generate
       - name: Pick available iPhone simulator
