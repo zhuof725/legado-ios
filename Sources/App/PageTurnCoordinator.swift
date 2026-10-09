@@ -15,6 +15,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
     private var shownIndex = -1
     private var turnGesture: ChapterTurnGesture?
     private var needsContentSettlement = false
+    private var lastSuppliedBack: ReaderPageFace?
 
     init(_ model: PageTurnView) {
         applied = model
@@ -42,6 +43,8 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         let chapterAnimated = changed && oldFront != nil && model.chapterDirection != 0
         if changed {
             retiring = vc.viewControllers ?? []
+            // UIKit 仍可能保留旧章邻页，清缓存前关闭它们的无障碍树。
+            fronts.values.forEach { $0.setAccessibilityVisible(false) }
             fronts.removeAll()
             backs.removeAll()
             generation = UUID()
@@ -51,7 +54,10 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         applied = model
         vc.view.backgroundColor = model.background
         vc.view.isOpaque = model.background.cgColor.alpha == 1
-        (Array(fronts.values) + Array(backs.values)).forEach { $0.setPaperColor(model.background) }
+        for (index, face) in fronts where model.pages.indices.contains(index) {
+            face.updateContent(model.pages[index], background: model.background)
+        }
+        backs.values.forEach { $0.setPaperColor(model.background) }
         guard !model.pages.isEmpty else {
             retiring.removeAll()
             finishContentUpdate()
@@ -60,6 +66,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         let index = min(max(model.current, 0), model.pages.count - 1)
         if let visible = visibleFront(), visible.generation == generation, visible.pageIndex == index {
             shownIndex = index
+            exposeOnly(visible)
             configureDataSource()
             finishContentUpdate()
             return
@@ -84,21 +91,40 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         return face
     }
 
+    private func suppliedBack(_ index: Int) -> ReaderPageFace {
+        let face = back(index)
+        lastSuppliedBack = face
+        return face
+    }
+
     private func visibleFront() -> ReaderPageFace? {
         vc?.viewControllers?.compactMap { $0 as? ReaderPageFace }.first { !$0.isBack }
     }
 
-    private func pair(for target: ReaderPageFace, previous: ReaderPageFace? = nil) -> [UIViewController] {
-        guard applied.style == .curl else { return [target] }
-        // spine.min + doubleSided: 正面 + 先前显示纸张的背面（Apple API 要求两个控制器）。
+    private func controllers(for target: ReaderPageFace, previous: ReaderPageFace?,
+                             direction: UIPageViewController.NavigationDirection,
+                             animated: Bool) -> [UIViewController] {
+        // spine.min 的静态展示只有一个可见正面；纸背仅在双面卷页动画时传入。
+        guard applied.style == .curl, animated, let previous else { return [target] }
+        let paper = direction == .forward ? previous : target
         let paperBack: ReaderPageFace
-        if let previous, previous.generation != generation {
-            paperBack = ReaderPageFace(index: previous.pageIndex, generation: previous.generation,
+        if paper.generation != generation {
+            paperBack = ReaderPageFace(index: paper.pageIndex, generation: paper.generation,
                                        content: nil, background: applied.background)
         } else {
-            paperBack = back(previous?.pageIndex ?? target.pageIndex)
+            paperBack = back(paper.pageIndex)
         }
+        lastSuppliedBack = paperBack
         return [target, paperBack]
+    }
+
+    private func exposeOnly(_ visible: ReaderPageFace) {
+        let retained = retiring.compactMap { $0 as? ReaderPageFace }
+        let mounted = vc?.viewControllers?.compactMap { $0 as? ReaderPageFace } ?? []
+        for face in Array(fronts.values) + Array(backs.values) + retained + mounted {
+            face.setAccessibilityVisible(face === visible)
+        }
+        visible.setAccessibilityVisible(true)
     }
 
     private func configureDataSource() {
@@ -106,10 +132,11 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
     }
 
     #if DEBUG
-    /// 离线 Harness 查询真实已挂载的纸背，不模拟背景色判断。
+    /// 只读最近实际提供给 UIKit 且被加载的纸背；不为探针创建/加载新控制器。
+    /// spine.min 静止时 viewControllers 只包含正面，不能要求纸背也在可见数组内。
     func debugBackColor() -> UIColor? {
-        guard applied.style == .curl else { return nil }
-        return back(max(shownIndex, 0)).view.backgroundColor
+        guard applied.style == .curl, let face = lastSuppliedBack, face.isViewLoaded else { return nil }
+        return face.view.backgroundColor
     }
     #endif
 
@@ -117,30 +144,32 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
                          animated: Bool, isContentUpdate: Bool) {
         guard let vc, let target = front(index) else { finishContentUpdate(); return }
         let old = visibleFront()
-        // 双面卷页首次安装也必须是“正面+背面”对；无先前页时用同一张纸的背面。
-        let targetPair = pair(for: target, previous: old)
+        let targetPair = controllers(for: target, previous: old, direction: direction, animated: animated)
         let token = UUID()
         let expectedGeneration = generation
         phase = .animation(token)
-        vc.dataSource = nil // programmatic 用显式两面，不允许 UIKit 预取旧章/新版式混合页面。
+        vc.dataSource = nil // 转场期间固定快照，不允许预取旧章/新版式混合页面。
         if animated { vc.view.isUserInteractionEnabled = false }
-        let finished: (Bool) -> Void = { [weak self, weak vc] completed in
-            guard let self, let vc, self.phase == .animation(token), self.generation == expectedGeneration else { return }
-            // false 只表示动画被跳过。以当前目标为准，静态收尾后也必须解锁。
-            if self.applied.style == .curl {
-                // 双面模式下显示正确的 正面+本页背面；不再运行时切换 isDoubleSided。
-                vc.setViewControllers([target, self.back(index)], direction: direction, animated: false)
-            } else if self.visibleFront() !== target || !completed {
-                vc.setViewControllers(targetPair, direction: direction, animated: false)
+        let finished: (Bool) -> Void = { [weak self, weak vc] _ in
+            // UIKit 可以同步调用静态安装的 completion；退出它的调用栈再更新/纠正页面。
+            DispatchQueue.main.async { [weak self, weak vc] in
+                guard let self, let vc, self.phase == .animation(token), self.generation == expectedGeneration else { return }
+                if animated || self.visibleFront() !== target {
+                    // 系统 scroll 会复用旧邻页；动画退出调用栈后静态确认一次目标，清掉旧队列。
+                    // 卷页也移除过渡纸背，但静态复位永远只传一个可见正面。
+                    vc.setViewControllers([target], direction: direction, animated: false)
+                }
+                self.shownIndex = index
+                self.exposeOnly(target)
+                vc.view.layoutIfNeeded()
+                self.phase = .idle
+                self.retiring.removeAll()
+                vc.view.isUserInteractionEnabled = true
+                self.configureDataSource()
+                self.publishCurrent(index, for: expectedGeneration)
+                if isContentUpdate { self.finishContentUpdate() }
+                DispatchQueue.main.async { [weak self] in self?.drain() }
             }
-            self.shownIndex = index
-            self.phase = .idle
-            self.retiring.removeAll()
-            vc.view.isUserInteractionEnabled = true
-            self.configureDataSource()
-            self.publishCurrent(index, for: expectedGeneration)
-            if isContentUpdate { self.finishContentUpdate() }
-            DispatchQueue.main.async { [weak self] in self?.drain() }
         }
         if animated && applied.style == .fade {
             vc.recordChapterFadeIfNeeded(from: old, to: target)
@@ -176,15 +205,20 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         }
     }
 
-    // 双面卷页：dataSource 只返回正面；UIKit 自行用“先前显示页的背面”完成配对。
+    // 双面纸的连续序列：正面 i → 背面 i → 正面 i+1；背面永不作为阅读页号。
     func pageViewController(_ pvc: UIPageViewController, viewControllerAfter controller: UIViewController) -> UIViewController? {
-        guard let face = controller as? ReaderPageFace, !face.isBack, face.generation == generation else { return nil }
-        return front(face.pageIndex + 1)
+        guard let face = controller as? ReaderPageFace, face.generation == generation else { return nil }
+        if applied.style != .curl || face.isBack { return front(face.pageIndex + 1) }
+        guard applied.pages.indices.contains(face.pageIndex + 1) else { return nil }
+        return suppliedBack(face.pageIndex)
     }
 
     func pageViewController(_ pvc: UIPageViewController, viewControllerBefore controller: UIViewController) -> UIViewController? {
-        guard let face = controller as? ReaderPageFace, !face.isBack, face.generation == generation else { return nil }
-        return front(face.pageIndex - 1)
+        guard let face = controller as? ReaderPageFace, face.generation == generation else { return nil }
+        if applied.style != .curl { return front(face.pageIndex - 1) }
+        if face.isBack { return front(face.pageIndex) }
+        guard applied.pages.indices.contains(face.pageIndex - 1) else { return nil }
+        return suppliedBack(face.pageIndex - 1)
     }
 
     func pageViewController(_ pvc: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
@@ -199,6 +233,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         phase = .idle
         if let face = visibleFront(), face.generation == generation {
             shownIndex = face.pageIndex
+            exposeOnly(face)
             publishCurrent(shownIndex, for: generation)
             configureDataSource()
         } else if shownIndex >= 0 {
@@ -277,6 +312,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         guard phase == .idle, let vc else { return }
         let token = UUID()
         let expectedGeneration = generation
+        let requestedIndex = shownIndex
         phase = .edge(token)
         turnGesture = nil
         let deliver: () -> Void = { [weak self, weak vc] in
@@ -284,11 +320,17 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
             // 不在手势分发中替换卷页纹理；下一轮 runloop 先复位，再通知父层。
             if self.applied.style == .curl, let face = self.front(self.shownIndex) {
                 vc.dataSource = nil
-                vc.setViewControllers(self.pair(for: face), direction: .forward, animated: false)
+                vc.setViewControllers([face], direction: .forward, animated: false)
+                self.exposeOnly(face)
             }
             self.phase = .idle
             self.configureDataSource() // 即便父层在书尾拒绝跨章，也必须可反向翻回。
-            if self.pending != nil { self.drain(); return }
+            if self.pending != nil { self.drain() }
+            // 同章的普通 SwiftUI 更新不能吞掉刚结束的边界手势；真正换页/换章才取消。
+            guard self.phase == .idle, self.generation == expectedGeneration,
+                  self.shownIndex == requestedIndex,
+                  (delta > 0 && requestedIndex == self.applied.pages.count - 1)
+                    || (delta < 0 && requestedIndex == 0) else { return }
             self.applied.onEdge(delta)
         }
         if let transition = vc.transitionCoordinator,

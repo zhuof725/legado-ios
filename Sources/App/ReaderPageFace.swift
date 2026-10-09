@@ -7,8 +7,9 @@ final class ReaderPageFace: UIViewController {
     let generation: UUID
     let isBack: Bool
     private var paperColor: UIColor
-    private let content: AnyView?
+    private var content: AnyView?
     private var host: UIHostingController<AnyView>?
+    private var accessibilityVisible = false
 
     init(index: Int, generation: UUID, content: AnyView?, background: UIColor) {
         pageIndex = index
@@ -23,7 +24,8 @@ final class ReaderPageFace: UIViewController {
     override func loadView() {
         view = UIView()
         view.backgroundColor = paperColor
-        view.isOpaque = true
+        view.isOpaque = paperColor.cgColor.alpha == 1
+        view.accessibilityElementsHidden = !accessibilityVisible || isBack
         if isBack {
             view.accessibilityIdentifier = "reader-page-back"
             view.accessibilityElementsHidden = true
@@ -40,10 +42,25 @@ final class ReaderPageFace: UIViewController {
         }
     }
 
+    /// 同一页的标题、主题和点击回调也可能变化，不能只在页数变化时重建 host。
+    func updateContent(_ content: AnyView, background: UIColor) {
+        guard !isBack else { return }
+        self.content = content
+        host?.rootView = content
+        setPaperColor(background)
+    }
+
+    /// UIPageViewController 会保留离屏邻页；VoiceOver 和 UI 测试只能看到当前正面。
+    func setAccessibilityVisible(_ visible: Bool) {
+        accessibilityVisible = visible && !isBack
+        if isViewLoaded { view.accessibilityElementsHidden = !accessibilityVisible }
+    }
+
     func setPaperColor(_ color: UIColor) {
         paperColor = color
         guard isViewLoaded else { return }
         view.backgroundColor = color
+        view.isOpaque = color.cgColor.alpha == 1
         host?.view.backgroundColor = color
     }
 }

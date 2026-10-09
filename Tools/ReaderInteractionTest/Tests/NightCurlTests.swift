@@ -2,42 +2,26 @@ import XCTest
 
 final class NightCurlTests: XCTestCase {
     func testNightCurlBackAndFooterSurviveChapterTransition() {
-        continueAfterFailure = false
-        let app = XCUIApplication()
-        app.launchArguments = ["--chapter-mode=curl-night"]
-        app.launch()
-        wait(app, chapter: 0, page: 0)
-        let title = app.staticTexts["reader-footer-title"]
-        let number = app.staticTexts["reader-footer-page"]
-        XCTAssertTrue(title.waitForExistence(timeout: 5))
-        let initialY = title.frame.midY
-        XCTAssertEqual(initialY, number.frame.midY, accuracy: 2)
-        tap(app, 0.91, 0.56)
-        wait(app, chapter: 0, page: 1)
-        XCTAssertEqual(title.frame.midY, initialY, accuracy: 2, "短尾页不能把页脚推上来")
-        app.buttons["inspect-animation"].tap()
-        let before = app.staticTexts["animation-metrics"].label
-        if before != "missing" { XCTAssertTrue(before.contains("double=true;back=28"), before) }
-        app.buttons["arm-animation"].tap()
-        tap(app, 0.91, 0.56)
-        wait(app, chapter: 1, page: 0)
-        app.buttons["inspect-animation"].tap()
-        let after = app.staticTexts["animation-metrics"].label
-        if after != "missing" {
-            XCTAssertTrue(after.contains("style=curl;requests=1;ends=1;idle=true;front=0;double=true;back=28"), after)
-            XCTAssertFalse(after.contains("frames=0"), "需捕获真正的动画帧而不是只检查章号")
-        }
-        XCTAssertEqual(title.frame.midY, initialY, accuracy: 2)
-        XCTAssertEqual(title.frame.midY, number.frame.midY, accuracy: 2)
-        XCTAssertTrue(title.label.contains("第2章"))
-        let image = XCTAttachment(screenshot: app.screenshot())
+        let reader = ReaderChecks(self, mode: "curl-night", load: "cached")
+        let initial = reader.expect(chapter: 0, page: 0, edges: 0)
+        reader.tap(0.91)
+        let tail = reader.expect(chapter: 0, page: 1, edges: 0, extra: ["back": "28"])
+        XCTAssertEqual(tail.footerY, initial.footerY, accuracy: 2, "短尾页不能把页脚推上来")
+        reader.app.buttons["arm-animation"].tap()
+        reader.tap(0.91)
+        let after = reader.expect(chapter: 1, page: 0, edges: 1,
+            extra: ["backMin": "28", "backMax": "28", "backAlpha": "255", "captureError": "none"])
+        XCTAssertGreaterThan(Int(after.values["frames"] ?? "0") ?? 0, 0, after.description)
+        XCTAssertGreaterThan(Int(after.values["backSamples"] ?? "0") ?? 0, 0, after.description)
+        XCTAssertEqual(after.footerY, initial.footerY, accuracy: 2)
+        let image = XCTAttachment(screenshot: reader.app.screenshot())
         image.name = "night-curl-chapter-completed"
         image.lifetime = .keepAlways
         add(image)
-        // 完成后还可以往回翻，不停在背面。
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.55)).press(forDuration: 0.03,
-            thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.84, dy: 0.55)))
-        wait(app, chapter: 0, page: 1)
+        reader.drag(from: (0.15, 0.55), to: (0.84, 0.55))
+        reader.expect(chapter: 0, page: 1, edges: 2)
+        reader.tap(0.10)
+        reader.expect(chapter: 0, page: 0, edges: 2)
     }
 
     private func wait(_ app: XCUIApplication, chapter: Int, page: Int) {

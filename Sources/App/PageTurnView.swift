@@ -137,10 +137,8 @@ struct PageTurnView: UIViewControllerRepresentable {
         let vc = ReaderPageViewController(transitionStyle: transition, navigationOrientation: .horizontal,
             options: style == .curl ? [.spineLocation: UIPageViewController.SpineLocation.min.rawValue] : nil)
         vc.view.backgroundColor = background
-        // pageCurl + spine.min + 双面时，UIKit 要求 setViewControllers 传入正面和背面。
-        // Coordinator 的首次安装会传入一对显式的主题色纸面，避免系统生成镜像白背。
-        // pageCurl + spine.min + 双面时，UIKit 要求 setViewControllers 传入正面和背面。
-        // 启动即双面，Coordinator 首次安装即传一对显式主题色纸面，避免系统镜像白背。
+        // 双面纸背由数据源/动画提供；spine.min 初次静态安装只有一个可见正面。
+        // 不在运行中切换单双面，避免系统合成白底镜像纸背。
         if style == .curl { vc.isDoubleSided = true }
         vc.view.clipsToBounds = true
         vc.delegate = context.coordinator

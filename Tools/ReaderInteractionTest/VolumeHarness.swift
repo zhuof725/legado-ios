@@ -42,7 +42,7 @@ struct VolumeHarnessView: View {
                     style: mode == "curl" ? .curl : (mode == "fade" ? .fade : .slide),
                     background: .white, onEdge: advance, onTapCenter: {},
                     contentID: "\(index)", chapterDirection: chapterDirection,
-                    onContentTransitionCompleted: { chapterDirection = 0 }).id("volume-\(chapterDirection == 0 ? 0 : 1)")
+                    onContentTransitionCompleted: { chapterDirection = 0 })
             }
             Text("entry=\(index);volume=\(chapters[index].isVolume)")
                 .accessibilityIdentifier("volume-state")

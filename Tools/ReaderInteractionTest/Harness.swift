@@ -7,6 +7,15 @@ enum WebViewSupport { static let userAgent = "ReaderInteractionTests" }
 
 @main
 struct HarnessApp: App {
+    init() {
+        // 仅测试 App：保留 UIKit NSException 的 reason，不能把初次安装崩溃误报为锁未释放。
+        NSSetUncaughtExceptionHandler { exception in
+            let message = "[ReaderHarness uncaught exception] \(exception.name.rawValue): \(exception.reason ?? "<nil>")\n"
+                + exception.callStackSymbols.joined(separator: "\n") + "\n"
+            FileHandle.standardError.write(Data(message.utf8))
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             if ProcessInfo.processInfo.arguments.contains("--typography-mode") {
