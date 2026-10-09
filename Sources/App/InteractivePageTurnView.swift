@@ -9,9 +9,14 @@ struct InteractivePageTurnView: View {
     let style: PageTurnStyle
     let onEdge: (Int) -> Void
     let onTapCenter: () -> Void
+    var contentID: String = ""
+    var chapterDirection: Int = 0
+    var onContentTransitionCompleted: () -> Void = {}
 
     var body: some View {
         PageTurnView(pages: pages, current: $current, style: style, background: .clear,
-                     onEdge: onEdge, onTapCenter: onTapCenter)
+                     onEdge: onEdge, onTapCenter: onTapCenter, contentID: contentID,
+                     chapterDirection: chapterDirection,
+                     onContentTransitionCompleted: onContentTransitionCompleted)
     }
 }

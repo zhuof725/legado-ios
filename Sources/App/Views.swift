@@ -157,6 +157,7 @@ struct ReaderView: View {
     @State private var pageInsets = EdgeInsets()
     @State private var pageRevision = 0
     @State private var pendingEdge: Int?
+    @State private var pendingChapterDirection = 0
     @State private var contentRequestID: UUID?
     @State private var chapterTask: Task<Void, Never>?
     @State private var prefetchTask: Task<Void, Never>?
@@ -438,6 +439,7 @@ struct ReaderView: View {
             prefetchTask?.cancel()
             prefetchTask = nil
             pendingEdge = nil
+            pendingChapterDirection = 0
             loading = false
             restorePermille = nil
             pendingLanding = nil
@@ -577,6 +579,10 @@ struct ReaderView: View {
         screenSize = geo.size
     }
 
+    private var pageContentID: String {
+        "\(index)-\(pageRevision)-\(settings.fontSize)-\(settings.lineSpacing)-\(settings.paragraphSpacing)-\(settings.leftMargin)-\(settings.rightMargin)-\(settings.topMargin)-\(settings.bottomMargin)-\(settings.theme)"
+    }
+
     private var renderedPages: [AnyView] {
         pages.enumerated().map { i, page in
             AnyView(PageContentView(page: page, fontSize: settings.fontSize,
@@ -598,11 +604,15 @@ struct ReaderView: View {
             PageTurnView(pages: renderedPages, current: $pageIndex, style: turnStyle,
                          background: UIColor(theme.bg),
                          onEdge: { dir in DispatchQueue.main.async { goAcrossEdge(dir) } },
-                         onTapCenter: { toggleBars() })
+                         onTapCenter: { toggleBars() }, contentID: pageContentID,
+                         chapterDirection: pendingChapterDirection,
+                         onContentTransitionCompleted: { pendingEdge = nil; pendingChapterDirection = 0 })
         } else {
             InteractivePageTurnView(pages: renderedPages, current: $pageIndex, style: .fade,
                                     onEdge: { goAcrossEdge($0) },
-                                    onTapCenter: { toggleBars() })
+                                    onTapCenter: { toggleBars() }, contentID: pageContentID,
+                                    chapterDirection: pendingChapterDirection,
+                                    onContentTransitionCompleted: { pendingEdge = nil; pendingChapterDirection = 0 })
         }
     }
 
@@ -614,7 +624,7 @@ struct ReaderView: View {
                 .onTapGesture { toggleBars() }
         } else {
             pageTurnContainer
-                .id("\(settings.pageTurnStyle)-\(pageRevision)-\(index)-\(settings.theme)")
+                .id("turn-style-\(settings.pageTurnStyle)")
                 .ignoresSafeArea()
                 .onChange(of: pageIndex) { i in recordPage(i) }
         }
@@ -636,6 +646,7 @@ struct ReaderView: View {
         guard let target = readableIndex(from: index + step, direction: step) else { return }
         // 必须直到这次请求成功/失败才解锁，不能用固定 0.6 秒窗口。
         pendingEdge = step
+        pendingChapterDirection = settings.pageMode == 1 ? step : 0
         loadChapter(target, landing: step < 0 && settings.pageMode == 1 ? .end : .start)
     }
 
@@ -727,7 +738,7 @@ struct ReaderView: View {
             if contentRequestID == requestID {
                 contentRequestID = nil
                 loading = false
-                pendingEdge = nil
+                if pendingChapterDirection == 0 { pendingEdge = nil }
                 chapterTask = nil
             }
         }
@@ -780,6 +791,8 @@ struct ReaderView: View {
         } catch {
             guard contentRequestID == requestID else { return }
             self.error = "正文加载失败：\(error.localizedDescription)"
+            pendingEdge = nil
+            pendingChapterDirection = 0
             retryTarget = target
             retryLanding = landing
         }

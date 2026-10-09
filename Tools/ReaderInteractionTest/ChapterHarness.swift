@@ -8,6 +8,7 @@ struct ChapterHarnessView: View {
     @State private var loading = false
     @State private var edgeCount = 0
     @State private var bars = 0
+    @State private var chapterDirection = 0
 
     private var pages: [AnyView] {
         (0..<2).map { n in
@@ -50,10 +51,14 @@ struct ChapterHarnessView: View {
                     }
                 } else if mode == "fade" {
                     InteractivePageTurnView(pages: pages, current: $page, style: .fade,
-                                            onEdge: advance, onTapCenter: { bars += 1 }).id(chapter)
+                                            onEdge: advance, onTapCenter: { bars += 1 },
+                                            contentID: "\(chapter)", chapterDirection: chapterDirection,
+                                            onContentTransitionCompleted: { chapterDirection = 0 })
                 } else {
                     PageTurnView(pages: pages, current: $page, style: mode == "curl" ? .curl : .slide,
-                                 background: .white, onEdge: advance, onTapCenter: { bars += 1 }).id(chapter)
+                                 background: .white, onEdge: advance, onTapCenter: { bars += 1 },
+                                 contentID: "\(chapter)", chapterDirection: chapterDirection,
+                                 onContentTransitionCompleted: { chapterDirection = 0 })
                 }
             }
             .overlay {
@@ -71,6 +76,7 @@ struct ChapterHarnessView: View {
         guard (0..<3).contains(target) else { return }
         loading = true
         edgeCount += 1
+        chapterDirection = mode == "scroll" || mode == "short" ? 0 : direction
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 700_000_000)
             chapter = target

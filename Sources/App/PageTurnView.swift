@@ -89,7 +89,15 @@ struct PageContentView: View {
                 }
                 }
                 }
-                Spacer(minLength: 8)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(fg)
+            .padding(.leading, CGFloat(leftMargin))
+            .padding(.trailing, CGFloat(rightMargin))
+            .padding(.top, safeInsets.top + CGFloat(topMargin))
+            .padding(.bottom, safeInsets.bottom + CGFloat(bottomMargin) + 24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .overlay(alignment: .bottom) {
                 HStack {
                     Text(title).lineLimit(1)
                     Spacer()
@@ -97,13 +105,12 @@ struct PageContentView: View {
                 }
                 .font(.system(size: 11))
                 .foregroundStyle(fg.opacity(0.45))
-                .frame(height: 16)
+                .frame(maxWidth: .infinity, minHeight: 16, maxHeight: 16, alignment: .bottom)
+                .padding(.leading, CGFloat(leftMargin))
+                .padding(.trailing, CGFloat(rightMargin))
+                .padding(.bottom, safeInsets.bottom + CGFloat(bottomMargin))
+                .allowsHitTesting(false)
             }
-            .foregroundStyle(fg)
-            .padding(.leading, CGFloat(leftMargin))
-            .padding(.trailing, CGFloat(rightMargin))
-            .padding(.top, safeInsets.top + CGFloat(topMargin))
-            .padding(.bottom, safeInsets.bottom + CGFloat(bottomMargin))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea()
@@ -121,6 +128,10 @@ struct PageTurnView: UIViewControllerRepresentable {
     /// 翻到章首之前 / 章末之后时通知上层切章。
     let onEdge: (Int) -> Void
     let onTapCenter: () -> Void
+    /// 内容身份变化时，保留同一个 UIPageViewController 并用当前动画进入新内容。
+    var contentID: String = ""
+    var chapterDirection: Int = 0
+    var onContentTransitionCompleted: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -128,12 +139,13 @@ struct PageTurnView: UIViewControllerRepresentable {
         let transition: UIPageViewController.TransitionStyle = style == .curl ? .pageCurl : .scroll
         let vc = UIPageViewController(transitionStyle: transition, navigationOrientation: .horizontal, options: style == .curl ? [.spineLocation: UIPageViewController.SpineLocation.min.rawValue] : nil)
         vc.view.backgroundColor = background
+        context.coordinator.setBackground(background)
         vc.dataSource = style == .fade ? nil : context.coordinator
         vc.delegate = context.coordinator
         if style == .curl { vc.isDoubleSided = false }
         vc.view.clipsToBounds = true
         context.coordinator.attach(vc)
-        context.coordinator.reloadIfNeeded(pagesCount: pages.count)
+        context.coordinator.reloadIfNeeded(pagesCount: pages.count, contentID: contentID)
         // 只观察拖动，不接管系统 scroll / pageCurl 的交互或手势代理。
         let pan = ChapterTurnPanObserver(target: context.coordinator, action: #selector(Coordinator.panned(_:)))
         pan.delegate = context.coordinator
@@ -155,8 +167,10 @@ struct PageTurnView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ vc: UIPageViewController, context: Context) {
         vc.view.backgroundColor = background
+        context.coordinator.setBackground(background)
         context.coordinator.parent = self
-        context.coordinator.reloadIfNeeded(pagesCount: pages.count)
+        vc.dataSource = style == .fade ? nil : context.coordinator
+        context.coordinator.reloadIfNeeded(pagesCount: pages.count, contentID: contentID)
         context.coordinator.show(index: current, animated: false)
     }
 
@@ -166,12 +180,19 @@ struct PageTurnView: UIViewControllerRepresentable {
         private var controllers: [Int: UIViewController] = [:]
         private var shownIndex = -1
         private var lastCount = -1
+        private var lastContentID = ""
         private var transitioning = false
+        private var pendingContentID: String?
         private var turnGesture: ChapterTurnGesture?
 
         init(_ parent: PageTurnView) { self.parent = parent }
 
         func attach(_ vc: UIPageViewController) { self.vc = vc }
+
+        func setBackground(_ color: UIColor) {
+            vc?.view.backgroundColor = color
+            controllers.values.forEach { $0.view.backgroundColor = color }
+        }
 
         private func controller(for index: Int) -> UIViewController? {
             guard index >= 0, index < parent.pages.count else { return nil }
@@ -184,22 +205,55 @@ struct PageTurnView: UIViewControllerRepresentable {
             return host
         }
 
-        func reloadIfNeeded(pagesCount: Int) {
-            if pagesCount != lastCount {
+        func reloadIfNeeded(pagesCount: Int, contentID: String) {
+            let pageCountChanged = pagesCount != lastCount
+            let contentChanged = !contentID.isEmpty && contentID != lastContentID
+            if pageCountChanged || contentChanged {
                 turnGesture = nil
                 controllers.removeAll()
-                shownIndex = -1
+                // 新章第一页应从索引 0 开始；保留一个方向快照，
+                // show() 会以新内容的第一页沿当前动画进入。
+                if contentChanged { shownIndex = -1 }
                 lastCount = pagesCount
+            }
+            if contentChanged {
+                lastContentID = contentID
+                pendingContentID = contentID
             }
         }
 
         func show(index: Int, animated: Bool, direction: UIPageViewController.NavigationDirection = .forward) {
             guard !transitioning, let vc, let target = controller(for: index) else { return }
-            if shownIndex == index, vc.viewControllers?.first === target { return }
+            if shownIndex == index, vc.viewControllers?.first === target {
+                if pendingContentID != nil { pendingContentID = nil }
+                return
+            }
             turnGesture = nil
-            let dir: UIPageViewController.NavigationDirection = index < shownIndex ? .reverse : direction
+            let chapterAnimated = pendingContentID != nil && parent.chapterDirection != 0
+            let shouldAnimate = animated || chapterAnimated
+            let dir: UIPageViewController.NavigationDirection = chapterAnimated
+                ? (parent.chapterDirection > 0 ? .forward : .reverse)
+                : (index < shownIndex ? .reverse : direction)
             shownIndex = index
-            vc.setViewControllers([target], direction: dir, animated: animated, completion: nil)
+            let contentID = pendingContentID
+            if shouldAnimate { transitioning = true }
+            let finish: (Bool) -> Void = { [weak self] completed in
+                guard let self else { return }
+                self.transitioning = false
+                if contentID != nil { self.pendingContentID = nil }
+                if completed, contentID != nil {
+                    DispatchQueue.main.async { self.parent.onContentTransitionCompleted() }
+                }
+            }
+            if chapterAnimated && parent.style == .fade {
+                UIView.transition(with: vc.view, duration: 0.22,
+                                  options: [.transitionCrossDissolve, .allowUserInteraction]) {
+                    vc.setViewControllers([target], direction: dir, animated: false, completion: nil)
+                } completion: { _ in finish(true) }
+            } else {
+                vc.setViewControllers([target], direction: dir, animated: shouldAnimate,
+                                       completion: finish)
+            }
         }
 
         // MARK: DataSource（滑动 / 卷页）
@@ -253,7 +307,7 @@ struct PageTurnView: UIViewControllerRepresentable {
                 } else if (delta > 0 && gesture.startIndex == gesture.pageCount - 1)
                             || (delta < 0 && gesture.startIndex == 0) {
                     // 判断触摸开始页，而非结束页：倒数第二页 -> 末页只能正常翻一页。
-                    parent.onEdge(delta)
+                    requestEdge(delta)
                 }
             case .cancelled, .failed:
                 turnGesture = nil
@@ -288,13 +342,39 @@ struct PageTurnView: UIViewControllerRepresentable {
             return true
         }
 
+        private func stopInteractiveTransitionForEdge() {
+            guard parent.style == .curl, let vc else { return }
+            // 系统 pageCurl 没有 dataSource 时会把边界拖动留在交互层；
+            // 先撤掉 dataSource 并同步回到当前控制器，再让父层加载下一章。
+            vc.dataSource = nil
+            if let current = vc.viewControllers?.first {
+                vc.setViewControllers([current], direction: .forward, animated: false, completion: nil)
+            }
+            transitioning = false
+            turnGesture = nil
+        }
+
+        private func requestEdge(_ delta: Int) {
+            guard parent.style == .curl, let vc, let coordinator = vc.transitionCoordinator else {
+                stopInteractiveTransitionForEdge()
+                DispatchQueue.main.async { self.parent.onEdge(delta) }
+                return
+            }
+            // 让当前卷页先回到稳定状态，再切换章节；否则 SwiftUI 重建页面会留下窄条卷页层。
+            coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+                guard let self else { return }
+                self.stopInteractiveTransitionForEdge()
+                self.parent.onEdge(delta)
+            }
+        }
+
         /// 点屏幕两侧翻页；淡入淡出时用交叉淡化，其余用系统动画。
         func go(_ delta: Int) {
             guard !transitioning, parent.pages.indices.contains(shownIndex) else { return }
             turnGesture = nil
             let next = shownIndex + delta
-            if next < 0 { parent.onEdge(-1); return }
-            if next >= parent.pages.count { parent.onEdge(1); return }
+            if next < 0 { requestEdge(-1); return }
+            if next >= parent.pages.count { requestEdge(1); return }
             guard let vc, let target = controller(for: next) else { return }
             let dir: UIPageViewController.NavigationDirection = delta > 0 ? .forward : .reverse
             transitioning = true
