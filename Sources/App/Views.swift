@@ -132,9 +132,25 @@ struct BookDetailView: View {
 
 // MARK: - Reader
 
+private final class ReaderTapGate: ObservableObject {
+    private var suppressUntil: TimeInterval = 0
+
+    func suppressForShortTap() {
+        suppressUntil = Date().timeIntervalSince1970 + 0.18
+    }
+
+    func consumeSuppression() -> Bool {
+        let now = Date().timeIntervalSince1970
+        guard now < suppressUntil else { return false }
+        suppressUntil = 0
+        return true
+    }
+}
+
 struct ReaderView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var settings: ReadSettings
+    @Environment(\.dismiss) private var dismiss
     let book: Book
 
     @State private var chapters: [BookChapter] = []
@@ -159,20 +175,16 @@ struct ReaderView: View {
     @State private var showToc = false
     @State private var showSettings = false
     @State private var showBars = false
-    @State private var suppressNextBarTap = false
+    @StateObject private var tapGate = ReaderTapGate()
 
-    private func toggleBarsWithHaptic() {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    private func toggleBars() {
         showBars.toggle()
     }
 
     private func commentTapped(_ target: String?) {
-        suppressNextBarTap = true
+        tapGate.suppressForShortTap()
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         openComment(target)
-        DispatchQueue.main.async {
-            suppressNextBarTap = false
-        }
     }
 
     private var theme: (bg: Color, fg: Color, name: String) {
@@ -251,25 +263,52 @@ struct ReaderView: View {
                     .onChange(of: loading) { _ in applyRestoreIfReady(proxy: proxy) }
                 }
                 .onTapGesture {
-                    if suppressNextBarTap {
-                        suppressNextBarTap = false
-                    } else {
-                        toggleBarsWithHaptic()
-                    }
+                    if !tapGate.consumeSuppression() { toggleBars() }
                 }
             }
         }
-        .navigationTitle(showBars ? book.name : "")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(showBars ? .visible : .hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .toolbar {
-            ToolbarItemGroup(placement: .bottomBar) {
-                if showBars {
-                    Button { showToc = true } label: { Label("目录", systemImage: "list.bullet") }
+        .overlay(alignment: .top) {
+            if showBars {
+                HStack(spacing: 18) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 22, weight: .medium))
+                            .frame(width: 44, height: 44)
+                    }
                     Spacer()
-                    Button { showSettings = true } label: { Label("设置", systemImage: "textformat.size") }
+                    Text(book.name)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Spacer()
+                    Color.clear.frame(width: 44, height: 44)
                 }
+                .foregroundStyle(theme.fg)
+                .padding(.horizontal, 18)
+                .padding(.top, 6)
+                .padding(.bottom, 8)
+                .background(theme.bg.opacity(0.96))
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if showBars {
+                HStack {
+                    Button { showToc = true } label: {
+                        Label("目录", systemImage: "list.bullet")
+                    }
+                    Spacer()
+                    Button { showSettings = true } label: {
+                        Label("设置", systemImage: "textformat.size")
+                    }
+                }
+                .font(.body)
+                .foregroundStyle(theme.fg)
+                .padding(.horizontal, 24)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
+                .background(theme.bg.opacity(0.96))
             }
         }
         .sheet(isPresented: $showToc) {
@@ -449,11 +488,11 @@ struct ReaderView: View {
             PageTurnView(pages: renderedPages, current: $pageIndex, style: turnStyle,
                          background: UIColor(theme.bg),
                          onEdge: { dir in DispatchQueue.main.async { goAcrossEdge(dir) } },
-                         onTapCenter: { toggleBarsWithHaptic() })
+                         onTapCenter: { toggleBars() })
         } else {
             InteractivePageTurnView(pages: renderedPages, current: $pageIndex, style: .fade,
                                     onEdge: { goAcrossEdge($0) },
-                                    onTapCenter: { toggleBarsWithHaptic() })
+                                    onTapCenter: { toggleBars() })
         }
     }
 
@@ -462,7 +501,7 @@ struct ReaderView: View {
         if pages.isEmpty {
             VStack { if loading { ProgressView() } else if let e = error { Text(e).foregroundStyle(.red) } else { Text("") } }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .onTapGesture { toggleBarsWithHaptic() }
+                .onTapGesture { toggleBars() }
         } else {
             pageTurnContainer
                 .id("\(settings.pageTurnStyle)-\(pageRevision)-\(index)-\(settings.theme)")

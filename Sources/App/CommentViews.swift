@@ -170,8 +170,12 @@ struct InlineCommentParagraph: UIViewRepresentable {
 final class CommentTextView: UITextView {
     var onBubbleTap: (() -> Void)?
     private var bubbleIndex: Int?
+    private var lastRenderKey: String?
 
     func render(text: String, count: Int, fontSize: CGFloat, lineSpacing: CGFloat, color: UIColor) {
+        let key = "\(text)|\(count)|\(fontSize)|\(lineSpacing)|\(color)"
+        guard key != lastRenderKey else { return }
+        lastRenderKey = key
         let result = NSMutableAttributedString()
         let style = NSMutableParagraphStyle()
         style.lineSpacing = lineSpacing
