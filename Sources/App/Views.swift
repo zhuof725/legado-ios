@@ -533,7 +533,7 @@ struct ReaderView: View {
     /// 重新分页：字号、行距、屏幕尺寸或内容变化时调用，并回到同一个字符位置。
     private func repaginate(keepOffset: Int? = nil) {
         guard settings.pageMode == 1, screenSize.width > 0 else { return }
-        if let volume = currentVolume {
+        if currentVolume != nil {
             pages = [BookPage(blocks: [], startOffset: 0)]
             pageRevision += 1
             pageIndex = 0
@@ -591,14 +591,13 @@ struct ReaderView: View {
     private var renderedPages: [AnyView] {
         pages.enumerated().map { i, page in
             AnyView(PageContentView(page: page, fontSize: settings.fontSize,
-                lineSpacing: settings.lineSpacing,
-                paragraphSpacing: settings.paragraphSpacing,
-                leftMargin: settings.leftMargin, rightMargin: settings.rightMargin,
-                topMargin: settings.topMargin, bottomMargin: settings.bottomMargin,
-                fg: theme.fg, bg: theme.bg,
+                lineSpacing: settings.lineSpacing, fg: theme.fg, bg: theme.bg,
                 title: chapters.indices.contains(index) ? chapters[index].title : "",
                 pageNumber: i + 1, pageCount: pages.count,
                 onTapComment: { commentTapped($0) }, safeInsets: pageInsets,
+                paragraphSpacing: settings.paragraphSpacing,
+                leftMargin: settings.leftMargin, rightMargin: settings.rightMargin,
+                topMargin: settings.topMargin, bottomMargin: settings.bottomMargin,
                 volumeTitle: currentVolume?.title,
                 showsChapterTitle: currentVolume == nil).ignoresSafeArea())
         }
