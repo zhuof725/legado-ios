@@ -139,7 +139,9 @@ struct PageTurnView: UIViewControllerRepresentable {
         vc.view.backgroundColor = background
         // pageCurl + spine.min + 双面时，UIKit 要求 setViewControllers 传入正面和背面。
         // Coordinator 的首次安装会传入一对显式的主题色纸面，避免系统生成镜像白背。
-        if style == .curl { vc.isDoubleSided = false }
+        // pageCurl + spine.min + 双面时，UIKit 要求 setViewControllers 传入正面和背面。
+        // 启动即双面，Coordinator 首次安装即传一对显式主题色纸面，避免系统镜像白背。
+        if style == .curl { vc.isDoubleSided = true }
         vc.view.clipsToBounds = true
         vc.delegate = context.coordinator
         context.coordinator.attach(vc)

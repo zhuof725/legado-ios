@@ -96,7 +96,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
             paperBack = ReaderPageFace(index: previous.pageIndex, generation: previous.generation,
                                        content: nil, background: applied.background)
         } else {
-            paperBack = back(previous?.pageIndex ?? max(target.pageIndex - 1, 0))
+            paperBack = back(previous?.pageIndex ?? target.pageIndex)
         }
         return [target, paperBack]
     }
@@ -117,9 +117,8 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
                          animated: Bool, isContentUpdate: Bool) {
         guard let vc, let target = front(index) else { finishContentUpdate(); return }
         let old = visibleFront()
-        let initialCurl = applied.style == .curl && old == nil && (vc.viewControllers?.isEmpty ?? true)
-        let targetPair = initialCurl ? [target] : pair(for: target, previous: old)
-        if initialCurl { vc.isDoubleSided = false }
+        // 双面卷页首次安装也必须是“正面+背面”对；无先前页时用同一张纸的背面。
+        let targetPair = pair(for: target, previous: old)
         let token = UUID()
         let expectedGeneration = generation
         phase = .animation(token)
@@ -129,8 +128,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
             guard let self, let vc, self.phase == .animation(token), self.generation == expectedGeneration else { return }
             // false 只表示动画被跳过。以当前目标为准，静态收尾后也必须解锁。
             if self.applied.style == .curl {
-                // 双面模式下 spine.min 必须传正面+背面；首次初始化先单面，完成后再切双面。
-                vc.isDoubleSided = true
+                // 双面模式下显示正确的 正面+本页背面；不再运行时切换 isDoubleSided。
                 vc.setViewControllers([target, self.back(index)], direction: direction, animated: false)
             } else if self.visibleFront() !== target || !completed {
                 vc.setViewControllers(targetPair, direction: direction, animated: false)
