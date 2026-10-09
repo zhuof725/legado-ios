@@ -196,25 +196,23 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
 
     private func configureDataSource() { vc?.dataSource = self }
 
-    /// .min + doubleSided 的每次安装都必须传两个 VC：目标正文和上一张纸的背面。
-    /// 动画使用离开的纸背；静态状态规范为目标正文之前的背面。首张的背面也只是一张纸，
-    /// dataSource 在没有上一正文时返回 nil，因此它永远不会成为空白阅读页。
-    private func controllers(for target: Key, turningFrom outgoing: Key? = nil) -> [UIViewController]? {
+    /// spine.min 的静态展示只接收一个正面；双面纸背仅在程序动画时传入。
+    /// 交互翻页的纸背由 dataSource 提供，不把纸背算成可阅读的一页。
+    private func controllers(for target: Key, turningFrom outgoing: Key? = nil,
+                             direction: UIPageViewController.NavigationDirection = .forward) -> [UIViewController]? {
         guard let face = front(target) else { return nil }
-        guard applied.style == .curl else { return [face] }
-        if let outgoing {
-            if let following = step(outgoing, 1) { return [face, back(before: following)] }
-            // 目录可跳到三章窗口之外；旧快照已退休，仍给 UIKit 离开那张纸的背面。
-            // 此 surface 仅用于 dataSource=nil 的原生动画，不充当任何逻辑页。
-            return [face, ReaderPageBack(before: outgoing.index + 1, contentID: outgoing.contentID,
-                generation: outgoing.generation, background: applied.background)]
-        }
-        return [face, back(before: target)]
+        guard applied.style == .curl, let outgoing else { return [face] }
+        // 前进翻走旧纸；后退翻回目标纸。B(n) 是 F(n) 前一张纸的背面。
+        let paper = direction == .forward ? outgoing : target
+        if let following = step(paper, 1) { return [face, back(before: following)] }
+        return [face, ReaderPageBack(before: paper.index + 1, contentID: paper.contentID,
+            generation: paper.generation, background: applied.background)]
     }
 
     private func install(_ target: Key, direction: UIPageViewController.NavigationDirection,
                          animated: Bool, contentUpdate: Bool, chapterTurn: Bool) {
-        guard let vc, let pair = controllers(for: target, turningFrom: animated ? shown : nil) else { finishContentUpdate(); return }
+        guard let vc, let pair = controllers(for: target, turningFrom: animated ? shown : nil,
+                                            direction: direction) else { finishContentUpdate(); return }
         let token = UUID()
         let origin = shown
         phase = .animation(token)

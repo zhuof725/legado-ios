@@ -192,7 +192,15 @@ private final class ReaderLineMetrics: NSObject, NSLayoutManagerDelegate {
         let index = layoutManager.characterIndexForGlyph(at: glyphRange.location)
         guard index < storage.length,
               let baseline = storage.attribute(ReaderTextLayout.baselineKey, at: index,
-                                               effectiveRange: nil) as? NSNumber else { return false }
+                                               effectiveRange: nil) as? NSNumber,
+              let style = storage.attribute(.paragraphStyle, at: index,
+                                            effectiveRange: nil) as? NSParagraphStyle else { return false }
+        // 仅修改 baselineOffset 不足以抑制混合字体的自然行框差异；下一行起点由
+        // lineFragmentRect 决定，必须与已预留所有字形/附件的统一行高一致。
+        let height = style.minimumLineHeight
+        lineFragmentRect.pointee.size.height = height + style.lineSpacing
+        lineFragmentUsedRect.pointee.origin.y = lineFragmentRect.pointee.minY
+        lineFragmentUsedRect.pointee.size.height = height
         baselineOffset.pointee = CGFloat(baseline.doubleValue)
         return true
     }

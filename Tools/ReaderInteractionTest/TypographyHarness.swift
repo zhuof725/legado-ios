@@ -105,6 +105,7 @@ private enum TypographyInspection {
         var edgeError: CGFloat = 0, tailError: CGFloat = 0, widthError: CGFloat = 0
         var gridGlyphs = 0, baselinePairs = 0, bubbleChecks = 0, preservationChecks = 0
         var bubbleOK = true, nativeRuns = true
+        var worstBaseline: [String: Any] = [:]
         let han = String(repeating: "春江花月夜山川风雨天", count: 12)
         let punctuation = String(repeating: "春江，花月。山川；风雨！天地？「阅读」《原文》", count: 8)
 
@@ -154,7 +155,21 @@ private enum TypographyInspection {
                     let height = layout(view, text: mixed, count: 82, width: width, size: size, spacing: spacing)
                     let rows = lines(view)
                     for (left, right) in zip(rows, rows.dropFirst()) {
-                        baselineError = max(baselineError, abs(right.baseline - left.baseline - grid.lineHeight - spacing))
+                        let error = abs(right.baseline - left.baseline - grid.lineHeight - spacing)
+                        if error > baselineError {
+                            baselineError = error
+                            let manager = view.layoutManager
+                            let leftChar = manager.characterIndexForGlyph(at: left.glyphs.location)
+                            let rightChar = manager.characterIndexForGlyph(at: right.glyphs.location)
+                            let string = view.textStorage.string as NSString
+                            worstBaseline = ["size": Double(size), "width": Double(width), "spacing": Double(spacing),
+                                "height": Double(grid.lineHeight), "baseline": Double(grid.baseline),
+                                "leftY": Double(left.rect.minY), "rightY": Double(right.rect.minY),
+                                "leftHeight": Double(left.rect.height), "rightHeight": Double(right.rect.height),
+                                "leftBaseline": Double(left.baseline), "rightBaseline": Double(right.baseline),
+                                "leftText": string.substring(with: NSRange(location: leftChar, length: min(8, string.length - leftChar))),
+                                "rightText": string.substring(with: NSRange(location: rightChar, length: min(8, string.length - rightChar)))]
+                        }
                         baselinePairs += 1
                     }
                     for row in rows {
@@ -249,7 +264,7 @@ private enum TypographyInspection {
             "shapingError": Double(shapingError), "paragraphHeightError": Double(paragraphHeightError),
             "pageOverflow": Double(pageOverflow), "offsetsOK": offsetsOK,
             "sourceOK": reconstructed == source + "短尾段", "continuations": continuationCount,
-            "commentCount": commentCount, "pages": pages.count
+            "commentCount": commentCount, "pages": pages.count, "worstBaseline": worstBaseline
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8) else { return "invalid" }
