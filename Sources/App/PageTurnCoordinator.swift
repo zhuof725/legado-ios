@@ -251,21 +251,25 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         turnGesture = nil
         let deliver: () -> Void = { [weak self, weak vc] in
             guard let self, let vc, self.phase == .edge(token), self.generation == expectedGeneration else { return }
-            // 不在手势分发中替换卷页纹理；下一轮 runloop 先复位，再通知父层。
-            if self.applied.style == .curl, let face = self.front(self.shownIndex) {
+            // 两种原生容器都先结束章末交互。scroll 到边界还会回弹，缓存立即返回时
+            // 不能在回弹中叠加 setViewControllers(animated: true)，否则完成回调可能不来。
+            if let face = self.front(self.shownIndex) {
                 vc.dataSource = nil
                 vc.setViewControllers([face], direction: .forward, animated: false)
                 self.exposeOnly(face)
             }
-            self.phase = .idle
-            self.configureDataSource() // 即便父层在书尾拒绝跨章，也必须可反向翻回。
-            if self.pending != nil { self.drain() }
-            // 同章的普通 SwiftUI 更新不能吞掉刚结束的边界手势；真正换页/换章才取消。
-            guard self.phase == .idle, self.generation == expectedGeneration,
-                  self.shownIndex == requestedIndex,
-                  (delta > 0 && requestedIndex == self.applied.pages.count - 1)
-                    || (delta < 0 && requestedIndex == 0) else { return }
-            self.applied.onEdge(delta)
+            // 退出 UIKit 复位调用栈后才接收新章，避免立即命中的缓存与原手势抢同一轮更新。
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.phase == .edge(token), self.generation == expectedGeneration else { return }
+                self.phase = .idle
+                self.configureDataSource()
+                if self.pending != nil { self.drain() }
+                guard self.phase == .idle, self.generation == expectedGeneration,
+                      self.shownIndex == requestedIndex,
+                      (delta > 0 && requestedIndex == self.applied.pages.count - 1)
+                        || (delta < 0 && requestedIndex == 0) else { return }
+                self.applied.onEdge(delta)
+            }
         }
         if let transition = vc.transitionCoordinator,
            transition.animate(alongsideTransition: nil, completion: { _ in DispatchQueue.main.async(execute: deliver) }) {
