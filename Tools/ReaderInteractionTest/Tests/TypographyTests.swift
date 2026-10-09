@@ -1,6 +1,45 @@
 import XCTest
 
 final class TypographyTests: XCTestCase {
+    func testNativeCJKColumnsBaselinesAndPagination() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--typography-mode"]
+        app.launch()
+        let inspect = app.buttons["inspect-typography"]
+        XCTAssertTrue(inspect.waitForExistence(timeout: 10))
+        inspect.tap()
+        let metrics = app.staticTexts["typography-metrics"]
+        let ready = NSPredicate { _, _ in metrics.exists && metrics.label.hasPrefix("{") }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: ready, object: metrics)], timeout: 10), .completed)
+        let data = try XCTUnwrap(metrics.label.data(using: .utf8))
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        func number(_ key: String) throws -> Double {
+            try XCTUnwrap(report[key] as? NSNumber, "Missing \(key): \(metrics.label)").doubleValue
+        }
+        // 首行/续段、全宽标点、不同字号和非整数字号倍数的宽度，实际字形落在同一网格。
+        for key in ["gridError", "stepError", "indentError", "edgeError", "tailError", "widthError"] {
+            XCTAssertLessThanOrEqual(try number(key), 0.25, "\(key): \(metrics.label)")
+        }
+        XCTAssertGreaterThan(try number("gridGlyphs"), 1000)
+        // 三档字号、三档宽度、0/8/30 行间距，Latin、emoji、气泡不能使某行忽高忽低。
+        XCTAssertLessThanOrEqual(try number("baselineError"), 0.5, metrics.label)
+        XCTAssertGreaterThan(try number("baselinePairs"), 80)
+        XCTAssertLessThanOrEqual(try number("clipping"), 0.5, metrics.label)
+        XCTAssertLessThanOrEqual(try number("shapingError"), 0.25, metrics.label)
+        XCTAssertEqual(report["nativeRuns"] as? Bool, true, metrics.label)
+        XCTAssertEqual(try number("bubbleChecks"), 27, metrics.label)
+        XCTAssertEqual(report["bubbleOK"] as? Bool, true, metrics.label)
+        XCTAssertEqual(try number("preservationChecks"), 63, metrics.label)
+        for key in ["heightError", "paragraphHeightError", "pageOverflow"] {
+            XCTAssertLessThanOrEqual(try number(key), 0.5, "\(key): \(metrics.label)")
+        }
+        XCTAssertEqual(report["offsetsOK"] as? Bool, true, metrics.label)
+        XCTAssertEqual(report["sourceOK"] as? Bool, true, metrics.label)
+        XCTAssertGreaterThan(try number("continuations"), 0, metrics.label)
+        XCTAssertGreaterThan(try number("pages"), 1, metrics.label)
+        XCTAssertEqual(try number("commentCount"), 1, metrics.label)
+    }
+
     func testLongChapterTitleIsVisibleAndLayoutControlsPersist() {
         let app = XCUIApplication()
         app.launchArguments = ["--typography-mode"]

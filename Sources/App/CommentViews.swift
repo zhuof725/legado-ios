@@ -188,6 +188,18 @@ final class CommentTextView: UITextView, UIGestureRecognizerDelegate {
     private var bubbleIndex: Int?
     private var lastRenderKey: String?
     private var paragraphTap: UITapGestureRecognizer?
+    private struct Paragraph {
+        let text: String
+        let count: Int
+        let fontSize: CGFloat
+        let lineSpacing: CGFloat
+        let color: UIColor
+        let continuation: Bool
+    }
+    private var paragraph: Paragraph?
+    private var needsTypesetting = false
+    private var isTypesetting = false
+    private(set) var renderedWidth: CGFloat = 0
 
     func installTapHandling() {
         guard paragraphTap == nil else { return }
@@ -202,6 +214,8 @@ final class CommentTextView: UITextView, UIGestureRecognizerDelegate {
 
     /// 使用附件实际字形区域，不能用“最近字符”判断（会把行尾空白误当气泡）。
     var bubbleRect: CGRect? {
+        // SwiftUI 可能探测过另一提议宽度；点击必须恢复到当前屏幕宽度再取字形。
+        if bounds.width > 0 { typeset(width: bounds.width) }
         guard let bubbleIndex, bubbleIndex < textStorage.length else { return nil }
         layoutManager.ensureLayout(for: textContainer)
         let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: bubbleIndex, length: 1),
@@ -232,25 +246,50 @@ final class CommentTextView: UITextView, UIGestureRecognizerDelegate {
         let key = "\(text)|\(count)|\(fontSize)|\(lineSpacing)|\(continuation)|\(color)"
         guard key != lastRenderKey else { return }
         lastRenderKey = key
-        let result = ReaderTextLayout.attributedText(text: text, count: count,
-                                                      fontSize: fontSize, lineSpacing: lineSpacing,
-                                                      color: color, continuation: continuation)
-        bubbleIndex = count > 0 ? result.length - 1 : nil
+        paragraph = Paragraph(text: text, count: count, fontSize: fontSize,
+                              lineSpacing: lineSpacing, color: color, continuation: continuation)
+        needsTypesetting = true
+        typeset(width: bounds.width > 0 ? bounds.width : renderedWidth)
+    }
+
+    private func typeset(width: CGFloat) {
+        guard !isTypesetting, let paragraph, width.isFinite, width >= 0,
+              needsTypesetting || width != renderedWidth else { return }
+        isTypesetting = true
+        defer { isTypesetting = false }
+        // 先更新缓存，避免设置 attributedText 导致 intrinsicContentSize 重入。
+        needsTypesetting = false
+        renderedWidth = width
+        let result = ReaderTextLayout.attributedText(
+            text: paragraph.text, count: paragraph.count, fontSize: paragraph.fontSize,
+            lineSpacing: paragraph.lineSpacing, color: paragraph.color,
+            continuation: paragraph.continuation, width: width > 0 ? width : nil)
+        bubbleIndex = paragraph.count > 0 ? result.length - 1 : nil
         attributedText = result
         textContainerInset = .zero
         textContainer.lineFragmentPadding = 0
+        textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
         invalidateIntrinsicContentSize()
     }
 
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        if size.width.isFinite, size.width > 0 { typeset(width: size.width) }
+        let fitted = super.sizeThatFits(size)
+        // UITextView 可能临时使用另一宽度进行试排。恢复本次字号/字格对应的容器，
+        // 避免屏幕上和段评命中区域仍沿用前一次试排宽度。
+        if renderedWidth > 0 { textContainer.size.width = renderedWidth }
+        return fitted
+    }
+
     override func layoutSubviews() {
+        if bounds.width > 0 { typeset(width: bounds.width) }
         super.layoutSubviews()
-        invalidateIntrinsicContentSize()
     }
 
     override var intrinsicContentSize: CGSize {
         guard bounds.width > 0 else { return CGSize(width: UIView.noIntrinsicMetric, height: 1) }
         return CGSize(width: UIView.noIntrinsicMetric,
-                      height: ceil(sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height))
+                      height: ReaderTextLayout.height(of: self, width: bounds.width))
     }
 
 }

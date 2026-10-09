@@ -138,6 +138,16 @@ private enum ChapterLanding {
     case saved(Int)
 }
 
+/// 已准备好的真实章节。提交跨章手势时直接接管这些页，不再加载或播放第二次动画。
+private struct PreparedReaderChapter {
+    let index: Int
+    let contentID: String
+    let text: String
+    let blocks: [ContentBlock]
+    let pages: [BookPage]
+    let configuration: ReaderPaginator.Configuration
+}
+
 struct ReaderView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var settings: ReadSettings
@@ -155,7 +165,10 @@ struct ReaderView: View {
     @State private var pageIndex = 0
     @State private var screenSize: CGSize = .zero
     @State private var pageInsets = EdgeInsets()
-    @State private var pageRevision = 0
+    @State private var pageContentID = UUID().uuidString
+    @State private var preparedChapters: [Int: PreparedReaderChapter] = [:]
+    @State private var preparationTask: Task<Void, Never>?
+    @State private var preparationID = UUID()
     @State private var pendingEdge: Int?
     @State private var pendingChapterDirection = 0
     @State private var contentRequestID: UUID?
@@ -194,6 +207,7 @@ struct ReaderView: View {
             GeometryReader { geo in
                 Color.clear.onAppear { updateViewport(geo) }
                     .onChange(of: geo.size) { _ in updateViewport(geo) }
+                    .onChange(of: geo.safeAreaInsets) { _ in updateViewport(geo) }
             }.ignoresSafeArea().allowsHitTesting(false)
             if settings.pageMode == 1 {
                 pagedBody
@@ -299,6 +313,7 @@ struct ReaderView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
+        .statusBarHidden(true)
         .overlay(alignment: .top) {
             if showBars {
                 HStack(spacing: 18) {
@@ -436,7 +451,10 @@ struct ReaderView: View {
             repaginate()
         }
         .onChange(of: screenSize) { _ in repaginate() }
+        .onChange(of: pageInsets) { _ in repaginate() }
         .onDisappear {
+            cancelPreparation()
+            preparedChapters.removeAll()
             contentRequestID = nil
             chapterTask?.cancel()
             chapterTask = nil
@@ -526,20 +544,8 @@ struct ReaderView: View {
 
     private var turnStyle: PageTurnStyle { PageTurnStyle(rawValue: settings.pageTurnStyle) ?? .slide }
 
-    /// 重新分页：字号、行距、屏幕尺寸或内容变化时调用，并回到同一个字符位置。
-    private func repaginate(keepOffset: Int? = nil) {
-        guard settings.pageMode == 1, screenSize.width > 0 else { return }
-        if currentVolume != nil {
-            pages = [BookPage(blocks: [], startOffset: 0)]
-            pageRevision += 1
-            pageIndex = 0
-            pendingLanding = nil
-            return
-        }
-        let source = readingBlocks
-        guard !source.isEmpty else { pages = []; return }
-        let offset = keepOffset ?? (pages.indices.contains(pageIndex) ? pages[pageIndex].startOffset : 0)
-        let configuration = ReaderPaginator.Configuration(
+    private func pageConfiguration(for target: Int) -> ReaderPaginator.Configuration {
+        ReaderPaginator.Configuration(
             pageSize: screenSize,
             safeInsets: UIEdgeInsets(top: pageInsets.top, left: pageInsets.leading,
                                      bottom: pageInsets.bottom, right: pageInsets.trailing),
@@ -550,9 +556,32 @@ struct ReaderView: View {
             rightInset: CGFloat(settings.rightMargin),
             topInset: CGFloat(settings.topMargin),
             bottomInset: CGFloat(settings.bottomMargin),
-            chapterTitle: chapters.indices.contains(index) ? chapters[index].title : "")
-        pages = ReaderPaginator.paginate(source, configuration: configuration)
-        pageRevision += 1
+            chapterTitle: chapters.indices.contains(target) && !chapters[target].isVolume ? chapters[target].title : "")
+    }
+
+    /// 正文与邻章共享版式；只在布局改变时换标识，主题变化直接重绘各个纸面。
+    private func repaginate(keepOffset: Int? = nil) {
+        cancelPreparation()
+        guard settings.pageMode == 1, screenSize.width > 0 else {
+            preparedChapters.removeAll()
+            return
+        }
+        defer {
+            rememberCurrentChapter()
+            prepareNearbyChapters()
+        }
+        if currentVolume != nil {
+            pages = [BookPage(blocks: [], startOffset: 0)]
+            pageContentID = UUID().uuidString
+            pageIndex = 0
+            pendingLanding = nil
+            return
+        }
+        let source = readingBlocks
+        guard !source.isEmpty else { pages = []; return }
+        let offset = keepOffset ?? (pages.indices.contains(pageIndex) ? pages[pageIndex].startOffset : 0)
+        pages = ReaderPaginator.paginate(source, configuration: pageConfiguration(for: index))
+        pageContentID = UUID().uuidString
         pageIndex = Paginator.pageIndex(containing: offset, in: pages)
         if !pages.isEmpty, let landing = pendingLanding {
             switch landing {
@@ -564,6 +593,102 @@ struct ReaderView: View {
             }
             pendingLanding = nil
         }
+    }
+
+    private func cancelPreparation() {
+        preparationTask?.cancel()
+        preparationTask = nil
+        preparationID = UUID()
+    }
+
+    private func rememberCurrentChapter() {
+        guard settings.pageMode == 1, chapters.indices.contains(index), !pages.isEmpty else { return }
+        preparedChapters[index] = PreparedReaderChapter(index: index, contentID: pageContentID,
+            text: text, blocks: blocks, pages: pages, configuration: pageConfiguration(for: index))
+    }
+
+    /// 在手势前准备真实相邻页。网络仍走共享缓存，UIKit 分页只在主线程执行。
+    private func prepareNearbyChapters() {
+        cancelPreparation()
+        guard settings.pageMode == 1, screenSize.width > 0, !pages.isEmpty else { return }
+        let center = index
+        let targets = [nextChapter, previousChapter].compactMap { $0 }
+        let retained = Set(targets + [center])
+        preparedChapters = preparedChapters.filter { retained.contains($0.key) }
+        let token = preparationID
+        preparationTask = Task { @MainActor in
+            // 先让当前页提交给 UIKit；预排版不是在 dataSource 查询/触摸回调里进行。
+            await Task.yield()
+            for target in targets {
+                guard !Task.isCancelled, preparationID == token, index == center else { return }
+                let configuration = pageConfiguration(for: target)
+                if preparedChapters[target]?.configuration == configuration { continue }
+                do {
+                    let content: (text: String, blocks: [ContentBlock])
+                    if let existing = preparedChapters[target] {
+                        content = (existing.text, existing.blocks)
+                    } else {
+                        let raw = try await rawContent(at: target, priority: .utility)
+                        content = Self.readingContent(raw: raw, isVolume: chapters[target].isVolume)
+                    }
+                    try Task.checkCancellation()
+                    guard preparationID == token, index == center,
+                          configuration == pageConfiguration(for: target) else { return }
+                    let source = content.blocks.isEmpty ? Paginator.blocks(fromPlain: content.text) : content.blocks
+                    let laidOut = chapters[target].isVolume
+                        ? [BookPage(blocks: [], startOffset: 0)]
+                        : ReaderPaginator.paginate(source, configuration: configuration)
+                    guard !laidOut.isEmpty else { continue }
+                    preparedChapters[target] = PreparedReaderChapter(index: target,
+                        contentID: UUID().uuidString, text: content.text, blocks: content.blocks,
+                        pages: laidOut, configuration: configuration)
+                    await Task.yield()
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // 预读失败不改当前章、不写进度；用户翻到边界时走正常加载/重试。
+                    continue
+                }
+            }
+            if preparationID == token { preparationTask = nil }
+        }
+    }
+
+    private func adoptPreparedChapter(_ prepared: PreparedReaderChapter, page: Int) {
+        guard chapters.indices.contains(prepared.index), prepared.pages.indices.contains(page) else { return }
+        cancelPreparation()
+        chapterTask?.cancel()
+        chapterTask = nil
+        contentRequestID = nil
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        index = prepared.index
+        pageContentID = prepared.contentID
+        text = prepared.text
+        blocks = prepared.blocks
+        pages = prepared.pages
+        pageIndex = page
+        preparedChapters[prepared.index] = prepared
+        loading = false
+        error = nil
+        retryTarget = nil
+        pendingLanding = nil
+        restorePermille = nil
+        pendingEdge = nil
+        pendingChapterDirection = 0
+        store.updateProgress(book, index: index, title: chapters[index].title)
+        recordPage(page)
+        // 只有 UIKit 确认提交才写入章号；取消手势不会来到这里。
+        if prepared.configuration != pageConfiguration(for: index) {
+            let expectedID = prepared.contentID
+            DispatchQueue.main.async {
+                guard pageContentID == expectedID else { return }
+                repaginate(keepOffset: prepared.pages[page].startOffset)
+            }
+        } else {
+            prepareNearbyChapters()
+        }
+        if let source = store.source(for: book.origin) { prefetch(source) }
     }
 
     private var currentVolume: BookChapter? {
@@ -583,32 +708,50 @@ struct ReaderView: View {
         screenSize = geo.size
     }
 
-    private var pageContentID: String {
-        "\(index)-\(pageRevision)-\(settings.fontSize)-\(settings.lineSpacing)-\(settings.paragraphSpacing)-\(settings.leftMargin)-\(settings.rightMargin)-\(settings.topMargin)-\(settings.bottomMargin)-\(settings.theme)"
-    }
-
-    private var renderedPages: [AnyView] {
-        pages.enumerated().map { i, page in
+    private func renderedPages(_ chapterPages: [BookPage], at target: Int) -> [AnyView] {
+        let chapter = chapters.indices.contains(target) ? chapters[target] : nil
+        return chapterPages.enumerated().map { i, page in
             AnyView(PageContentView(page: page, fontSize: settings.fontSize,
                 lineSpacing: settings.lineSpacing, fg: theme.fg, bg: theme.bg,
-                title: chapters.indices.contains(index) ? chapters[index].title : "",
-                pageNumber: i + 1, pageCount: pages.count,
+                title: chapter?.title ?? "",
+                pageNumber: i + 1, pageCount: chapterPages.count,
                 onTapComment: { commentTapped($0) }, safeInsets: pageInsets,
                 paragraphSpacing: settings.paragraphSpacing,
                 leftMargin: settings.leftMargin, rightMargin: settings.rightMargin,
                 topMargin: settings.topMargin, bottomMargin: settings.bottomMargin,
-                volumeTitle: currentVolume?.title,
-                showsChapterTitle: currentVolume == nil).ignoresSafeArea())
+                volumeTitle: chapter?.isVolume == true ? chapter?.title : nil,
+                showsChapterTitle: chapter?.isVolume != true).ignoresSafeArea())
         }
     }
 
+    private func preparedChapter(at target: Int?) -> PreparedReaderChapter? {
+        guard let target, let prepared = preparedChapters[target],
+              prepared.configuration == pageConfiguration(for: target) else { return nil }
+        return prepared
+    }
+
+    private func pageTurnChapter(_ prepared: PreparedReaderChapter?) -> PageTurnChapter? {
+        guard let prepared else { return nil }
+        return PageTurnChapter(contentID: prepared.contentID,
+                               pages: renderedPages(prepared.pages, at: prepared.index))
+    }
+
     private var pageTurnContainer: some View {
-        PageTurnView(pages: renderedPages, current: $pageIndex, style: turnStyle,
+        let previous = preparedChapter(at: previousChapter)
+        let next = preparedChapter(at: nextChapter)
+        return PageTurnView(pages: renderedPages(pages, at: index), current: $pageIndex, style: turnStyle,
                      background: UIColor(theme.bg),
                      onEdge: { dir in DispatchQueue.main.async { goAcrossEdge(dir) } },
                      onTapCenter: { toggleBars() }, contentID: pageContentID,
                      chapterDirection: pendingChapterDirection,
-                     onContentTransitionCompleted: { pendingEdge = nil; pendingChapterDirection = 0 })
+                     onContentTransitionCompleted: { pendingEdge = nil; pendingChapterDirection = 0 },
+                     previousChapter: pageTurnChapter(previous),
+                     nextChapter: pageTurnChapter(next),
+                     onChapterTransition: { direction, page in
+                         if let target = direction > 0 ? next : previous {
+                             adoptPreparedChapter(target, page: page)
+                         }
+                     })
     }
 
     @ViewBuilder
@@ -715,6 +858,7 @@ struct ReaderView: View {
 
     private func loadChapter(_ target: Int, landing: ChapterLanding) {
         guard !loading, chapters.indices.contains(target) else { return }
+        cancelPreparation()
         chapterTask?.cancel()
         // 停止旧预读队列的后续任务；在途的目标章由共享缓存接管，不会重复抓取。
         prefetchTask?.cancel()
@@ -741,26 +885,7 @@ struct ReaderView: View {
         guard chapters.indices.contains(target), contentRequestID == requestID else { return }
         let chapter = chapters[target]
         do {
-            let raw: String
-            if chapter.isVolume {
-                // 卷标题是独立的本地阅读项，不当成空章节，也不请求卷链接。
-                raw = chapter.title
-            } else if store.isLocal(book) {
-                guard let local = store.localContent(book, index: target) else {
-                    throw NSError(domain: "Reader", code: 1,
-                                  userInfo: [NSLocalizedDescriptionKey: "本地章节文件不存在"])
-                }
-                raw = local.isEmpty ? "（本章没有内容）" : local
-            } else {
-                guard let source = store.source(for: book.origin) else {
-                    throw NSError(domain: "Reader", code: 2,
-                                  userInfo: [NSLocalizedDescriptionKey: "找不到书源"])
-                }
-                let next = ChapterNavigation.contentIndex(from: target + 1, direction: 1, chapters: chapters)
-                    .map { chapters[$0].url }
-                raw = try await ChapterContentLoader.content(source: source, book: book, chapter: chapter,
-                                                             nextChapterURL: next)
-            }
+            let raw = try await rawContent(at: target, priority: .userInitiated)
             try Task.checkCancellation()
             guard contentRequestID == requestID else { return }
             // 网络失败时不改章号、不清旧文、不覆盖已保存的阅读位置。
@@ -795,16 +920,41 @@ struct ReaderView: View {
         }
     }
 
-    /// 缓存里存的是规则输出的原始文本（可能带 <comment>/<img>）；旧缓存是纯文本，同样能解析。
-    private func show(raw: String, landing: ChapterLanding) {
+    @MainActor
+    private func rawContent(at target: Int, priority: TaskPriority) async throws -> String {
+        let chapter = chapters[target]
+        if chapter.isVolume { return chapter.title }
+        if store.isLocal(book) {
+            guard let local = store.localContent(book, index: target) else {
+                throw NSError(domain: "Reader", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "本地章节文件不存在"])
+            }
+            return local.isEmpty ? "（本章没有内容）" : local
+        }
+        guard let source = store.source(for: book.origin) else {
+            throw NSError(domain: "Reader", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "找不到书源"])
+        }
+        let next = ChapterNavigation.contentIndex(from: target + 1, direction: 1, chapters: chapters)
+            .map { chapters[$0].url }
+        return try await ChapterContentLoader.content(source: source, book: book, chapter: chapter,
+                                                       nextChapterURL: next, priority: priority)
+    }
+
+    private static func readingContent(raw: String, isVolume: Bool) -> (text: String, blocks: [ContentBlock]) {
+        if isVolume { return (raw, []) }
         let parsed = ContentBlocks.parse(raw)
         let hasRich = parsed.contains { if case .paragraph(_, let c, _) = $0 { return c > 0 }; if case .paragraph = $0 { return false }; return true }
-        if currentVolume != nil { blocks = []; text = raw }
-        else if hasRich { blocks = parsed; text = "" }
-        else { blocks = []; text = WebBook.cleanText(raw) }
-        if currentVolume == nil && blocks.isEmpty && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            text = "（本章没有内容）"
-        }
+        if hasRich { return ("", parsed) }
+        let clean = WebBook.cleanText(raw)
+        return (clean.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "（本章没有内容）" : clean, [])
+    }
+
+    /// 前台与预排版使用同一解析流程，保留原始段评标记和续段字符偏移。
+    private func show(raw: String, landing: ChapterLanding) {
+        let content = Self.readingContent(raw: raw, isVolume: currentVolume != nil)
+        text = content.text
+        blocks = content.blocks
         pages = []
         pageIndex = 0
         restorePermille = nil

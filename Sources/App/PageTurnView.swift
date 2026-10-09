@@ -115,6 +115,12 @@ struct PageContentView: View {
     }
 }
 
+/// 已按当前版式完成分页的相邻章节；接纳后 contentID 必须保持不变。
+struct PageTurnChapter {
+    let contentID: String
+    let pages: [AnyView]
+}
+
 /// 稳定挂载的系统翻页容器，跨章更新由 Coordinator 排队处理。
 struct PageTurnView: UIViewControllerRepresentable {
     let pages: [AnyView]
@@ -127,6 +133,10 @@ struct PageTurnView: UIViewControllerRepresentable {
     var chapterDirection: Int = 0
     /// 每次内容替换稳定后调用（包括系统跳过动画），父层据此解除锁。
     var onContentTransitionCompleted: () -> Void = {}
+    var previousChapter: PageTurnChapter? = nil
+    var nextChapter: PageTurnChapter? = nil
+    /// 仅原生翻页提交后调用；父层原子接纳对应快照和页码，不再发起第二次动画。
+    var onChapterTransition: (_ direction: Int, _ pageIndex: Int) -> Void = { _, _ in }
 
     func makeCoordinator() -> PageTurnCoordinator { PageTurnCoordinator(self) }
 
@@ -135,8 +145,8 @@ struct PageTurnView: UIViewControllerRepresentable {
         let vc = UIPageViewController(transitionStyle: transition, navigationOrientation: .horizontal,
             options: style == .curl ? [.spineLocation: UIPageViewController.SpineLocation.min.rawValue] : nil)
         vc.view.backgroundColor = background
-        // 采用系统默认单面卷页，纸背、折角、阴影及跟手动画全部交给 UIKit。
-        if style == .curl { vc.isDoubleSided = false }
+        // 双面仅提供不透明主题纸背；卷曲、阴影、曲线和跟手仍完全由 UIKit 绘制。
+        if style == .curl { vc.isDoubleSided = true }
         vc.view.clipsToBounds = true
         vc.delegate = context.coordinator
         context.coordinator.attach(vc)

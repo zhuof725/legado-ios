@@ -1,18 +1,36 @@
 import SwiftUI
 import UIKit
 
-/// 章节更新、手势和原生动画串行处理；动画过程中不替换数据源快照。
+/// UIKit 始终查询冻结的三章快照；正文页和纸背是两种 surface，不是两页阅读进度。
 final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIGestureRecognizerDelegate {
-    private enum Phase: Equatable { case idle, interactive, animation(UUID), edge(UUID) }
+    private enum Phase: Equatable { case idle, tracking, interactive(UUID), animation(UUID), edge(UUID), adoption(UUID) }
+    private struct Snapshot {
+        let generation: UUID
+        let pages: [AnyView]
+    }
+    private struct Key: Hashable {
+        let contentID: String
+        let generation: UUID
+        let index: Int
+    }
+    private struct Adoption {
+        let token: UUID
+        let target: Key
+    }
+
     private weak var vc: UIPageViewController?
     private var applied: PageTurnView
     private var pending: PageTurnView?
     private var phase: Phase = .idle
-    private var generation = UUID()
-    private var fronts: [Int: ReaderPageHost] = [:]
-    private var retiring: [UIViewController] = []
-    private var shownIndex = -1
+    private var snapshots: [String: Snapshot] = [:]
+    private var order: [String] = []
+    private var fronts: [Key: ReaderPageHost] = [:]
+    private var backs: [Key: ReaderPageBack] = [:]
+    private var shown: Key?
+    private var interactionOrigin: Key?
+    private var adoption: Adoption?
     private var turnGesture: ChapterTurnGesture?
+    private var publication = UUID()
     private var needsContentSettlement = false
 
     init(_ model: PageTurnView) {
@@ -20,7 +38,11 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         needsContentSettlement = model.chapterDirection != 0
     }
 
-    var isIdle: Bool { phase == .idle && pending == nil }
+    var isIdle: Bool { phase == .idle && pending == nil && adoption == nil }
+    var isInteractive: Bool {
+        if case .interactive = phase { return true }
+        return false
+    }
 
     func attach(_ controller: UIPageViewController) {
         vc = controller
@@ -28,153 +50,316 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
     }
 
     func update(_ model: PageTurnView) {
-        pending = model // 合并到最后一份版式/内容；不可在 UIKit 转场中清空 controllers。
+        if let adoption {
+            // 交互期间排队的旧章/旧版式绝不能把已经提交的邻章翻回去。
+            // 父层先接纳原快照 ID，随后才可重新分页或导航到其他内容。
+            guard model.contentID == adoption.target.contentID else { return }
+            guard phase == .adoption(adoption.token) else { return }
+            phase = .idle
+        }
+        pending = model
         drain()
     }
 
     private func drain() {
         guard phase == .idle, let model = pending, let vc else { return }
         pending = nil
-        let changed = model.contentID != applied.contentID || model.pages.count != applied.pages.count
+        publication = UUID()
         let oldFront = visibleFront()
-        let direction = model.chapterDirection > 0 ? UIPageViewController.NavigationDirection.forward : .reverse
-        let chapterAnimated = changed && oldFront != nil && model.chapterDirection != 0
-        if changed {
-            retiring = vc.viewControllers ?? []
-            // UIKit 仍可能保留旧章邻页，清缓存前关闭它们的无障碍树。
-            fronts.values.forEach { $0.setAccessibilityVisible(false) }
-            fronts.removeAll()
-            generation = UUID()
-            turnGesture = nil
-            needsContentSettlement = true
-        }
+        let oldOrder = order
+        let oldGenerations = snapshots.mapValues { $0.generation }
+        let changed = model.contentID != applied.contentID || model.pages.count != applied.pages.count
+        let adopting = adoption?.target.contentID == model.contentID
+        if changed { needsContentSettlement = true }
+        adoption = nil
         applied = model
+        refreshSnapshots(model)
+        let topologyChanged = oldOrder != order || oldGenerations != snapshots.mapValues { $0.generation }
         vc.view.backgroundColor = model.background
         vc.view.isOpaque = model.background.cgColor.alpha == 1
-        for (index, face) in fronts where model.pages.indices.contains(index) {
-            face.updateContent(model.pages[index], background: model.background)
+        for (key, face) in fronts where valid(key) {
+            face.updateContent(snapshots[key.contentID]!.pages[key.index], background: model.background)
         }
-        guard !model.pages.isEmpty else {
-            retiring.removeAll()
+        for back in backs.values { back.updateBackground(model.background) }
+        guard let snapshot = snapshots[model.contentID], !snapshot.pages.isEmpty else {
+            exposeOnly(nil)
             finishContentUpdate()
             return
         }
-        let index = min(max(model.current, 0), model.pages.count - 1)
-        if let visible = visibleFront(), visible.generation == generation, visible.pageIndex == index {
-            shownIndex = index
-            exposeOnly(visible)
+        let index = min(max(model.current, 0), snapshot.pages.count - 1)
+        let target = Key(contentID: model.contentID, generation: snapshot.generation, index: index)
+        let alreadyVisible = oldFront.map { key($0) == target } ?? false
+        if alreadyVisible && !topologyChanged {
+            shown = target
+            exposeOnly(oldFront)
+            prune()
+            vc.view.isUserInteractionEnabled = true
             configureDataSource()
             finishContentUpdate()
             return
         }
-        install(index: index, direction: chapterAnimated ? direction : (index < shownIndex ? .reverse : .forward),
-                animated: chapterAnimated, isContentUpdate: true)
+        // theme/rootView 更新或相邻快照更新不动画；接纳已经可见的邻章也不再次翻页。
+        let animated = changed && !adopting && !alreadyVisible && oldFront != nil && model.chapterDirection != 0
+        let direction: UIPageViewController.NavigationDirection = animated
+            ? (model.chapterDirection > 0 ? .forward : .reverse)
+            : (index < (shown?.index ?? 0) ? .reverse : .forward)
+        install(target, direction: direction, animated: animated, contentUpdate: true, chapterTurn: false)
     }
 
-    private func front(_ index: Int) -> ReaderPageHost? {
-        guard applied.pages.indices.contains(index) else { return nil }
-        if let cached = fronts[index] { return cached }
-        let face = ReaderPageHost(index: index, generation: generation,
-                                  content: applied.pages[index], background: applied.background)
-        fronts[index] = face
+    private func refreshSnapshots(_ model: PageTurnView) {
+        var chapters: [PageTurnChapter] = []
+        if let previous = model.previousChapter, previous.contentID != model.contentID, !previous.pages.isEmpty {
+            chapters.append(previous)
+        }
+        chapters.append(PageTurnChapter(contentID: model.contentID, pages: model.pages))
+        if let next = model.nextChapter, !chapters.contains(where: { $0.contentID == next.contentID }), !next.pages.isEmpty {
+            chapters.append(next)
+        }
+        var updated: [String: Snapshot] = [:]
+        for chapter in chapters {
+            let existing = snapshots[chapter.contentID]
+            let generation = existing?.pages.count == chapter.pages.count ? existing!.generation : UUID()
+            updated[chapter.contentID] = Snapshot(generation: generation, pages: chapter.pages)
+        }
+        snapshots = updated
+        order = chapters.map { $0.contentID }
+        for (key, face) in fronts where !valid(key) { face.setAccessibilityVisible(false) }
+        fronts = fronts.filter { valid($0.key) }
+        backs = backs.filter { valid($0.key) }
+    }
+
+    private func valid(_ key: Key) -> Bool {
+        guard let snapshot = snapshots[key.contentID] else { return false }
+        return snapshot.generation == key.generation && snapshot.pages.indices.contains(key.index)
+    }
+
+    private func key(_ controller: UIViewController) -> Key? {
+        if let face = controller as? ReaderPageHost {
+            return Key(contentID: face.contentID, generation: face.generation, index: face.pageIndex)
+        }
+        if let back = controller as? ReaderPageBack {
+            return Key(contentID: back.contentID, generation: back.generation, index: back.pageIndex)
+        }
+        return nil
+    }
+
+    private func step(_ key: Key, _ delta: Int) -> Key? {
+        guard valid(key), let snapshot = snapshots[key.contentID], let position = order.firstIndex(of: key.contentID) else { return nil }
+        let index = key.index + delta
+        if snapshot.pages.indices.contains(index) {
+            return Key(contentID: key.contentID, generation: key.generation, index: index)
+        }
+        let adjacent = position + delta
+        guard order.indices.contains(adjacent), let neighbor = snapshots[order[adjacent]], !neighbor.pages.isEmpty else { return nil }
+        return Key(contentID: order[adjacent], generation: neighbor.generation, index: delta > 0 ? 0 : neighbor.pages.count - 1)
+    }
+
+    private func front(_ key: Key) -> ReaderPageHost? {
+        guard valid(key), let snapshot = snapshots[key.contentID] else { return nil }
+        if let cached = fronts[key] { return cached }
+        let face = ReaderPageHost(index: key.index, contentID: key.contentID, generation: key.generation,
+                                  content: snapshot.pages[key.index], background: applied.background)
+        fronts[key] = face
         return face
     }
 
-    private func visibleFront() -> ReaderPageHost? {
-        vc?.viewControllers?.first as? ReaderPageHost
+    /// B(n) 是 F(n) 之前那张纸的背面：F(n-1) ⇄ B(n) ⇄ F(n)。
+    private func back(before key: Key) -> ReaderPageBack {
+        if let cached = backs[key] { return cached }
+        let back = ReaderPageBack(before: key.index, contentID: key.contentID,
+                                  generation: key.generation, background: applied.background)
+        backs[key] = back
+        return back
     }
 
-    private func exposeOnly(_ visible: ReaderPageHost) {
-        let retained = retiring.compactMap { $0 as? ReaderPageHost }
+    private func visibleFront() -> ReaderPageHost? {
+        vc?.viewControllers?.compactMap { $0 as? ReaderPageHost }.first
+    }
+
+    private func exposeOnly(_ visible: ReaderPageHost?) {
         let mounted = vc?.viewControllers?.compactMap { $0 as? ReaderPageHost } ?? []
-        for face in Array(fronts.values) + retained + mounted {
-            face.setAccessibilityVisible(face === visible)
+        for face in Array(fronts.values) + mounted { face.setAccessibilityVisible(face === visible) }
+        visible?.setAccessibilityVisible(true)
+    }
+
+    private func prune() {
+        guard let shown, valid(shown) else { return }
+        var keep: Set<Key> = [shown]
+        for delta in [-1, 1] {
+            if let near = step(shown, delta) {
+                keep.insert(near)
+                if let second = step(near, delta) { keep.insert(second) }
+            }
         }
-        visible.setAccessibilityVisible(true)
+        for (key, face) in fronts where !keep.contains(key) { face.setAccessibilityVisible(false) }
+        fronts = fronts.filter { keep.contains($0.key) }
+        backs = backs.filter { keep.contains($0.key) }
     }
 
     private func configureDataSource() { vc?.dataSource = self }
 
-    private func install(index: Int, direction: UIPageViewController.NavigationDirection,
-                         animated: Bool, isContentUpdate: Bool) {
-        guard let vc, let target = front(index) else { finishContentUpdate(); return }
+    /// .min + doubleSided 的每次安装都必须传两个 VC：目标正文和上一张纸的背面。
+    /// 动画使用离开的纸背；静态状态规范为目标正文之前的背面。首张的背面也只是一张纸，
+    /// dataSource 在没有上一正文时返回 nil，因此它永远不会成为空白阅读页。
+    private func controllers(for target: Key, turningFrom outgoing: Key? = nil) -> [UIViewController]? {
+        guard let face = front(target) else { return nil }
+        guard applied.style == .curl else { return [face] }
+        if let outgoing {
+            if let following = step(outgoing, 1) { return [face, back(before: following)] }
+            // 目录可跳到三章窗口之外；旧快照已退休，仍给 UIKit 离开那张纸的背面。
+            // 此 surface 仅用于 dataSource=nil 的原生动画，不充当任何逻辑页。
+            return [face, ReaderPageBack(before: outgoing.index + 1, contentID: outgoing.contentID,
+                generation: outgoing.generation, background: applied.background)]
+        }
+        return [face, back(before: target)]
+    }
+
+    private func install(_ target: Key, direction: UIPageViewController.NavigationDirection,
+                         animated: Bool, contentUpdate: Bool, chapterTurn: Bool) {
+        guard let vc, let pair = controllers(for: target, turningFrom: animated ? shown : nil) else { finishContentUpdate(); return }
         let token = UUID()
-        let expectedGeneration = generation
+        let origin = shown
+        publication = UUID()
         phase = .animation(token)
         vc.dataSource = nil
-        if animated { vc.view.isUserInteractionEnabled = false }
-        // 不指定时长、曲线、阴影或纸背，完全使用 UIKit 的原生动画。
-        vc.setViewControllers([target], direction: direction, animated: animated) { [weak self, weak vc] _ in
+        vc.view.isUserInteractionEnabled = false
+        // 不设时长、曲线、阴影；curl/scroll 的整段动画完全由原生容器负责。
+        vc.setViewControllers(pair, direction: direction, animated: animated) { [weak self, weak vc] _ in
             DispatchQueue.main.async {
-                guard let self, let vc, self.phase == .animation(token), self.generation == expectedGeneration else { return }
-                if self.visibleFront() !== target || (animated && self.applied.style == .slide) {
-                    // 原生 scroll 会缓存旧邻页；退出完成回调后静态确认目标，避免跨章旧页残留。
-                    vc.setViewControllers([target], direction: direction, animated: false)
+                guard let self, let vc, self.phase == .animation(token), self.valid(target) else { return }
+                if chapterTurn && self.visibleFront().flatMap({ self.key($0) }) != target {
+                    // 原生动画未提交（例如被系统取消）时不能宣布跨章。
+                    if let origin, let original = self.controllers(for: origin) {
+                        vc.setViewControllers(original, direction: .forward, animated: false)
+                        self.shown = origin
+                        self.exposeOnly(self.front(origin))
+                    }
+                    self.phase = .idle
+                    vc.view.isUserInteractionEnabled = true
+                    self.configureDataSource()
+                    self.drain()
+                    return
                 }
-                self.shownIndex = index
-                self.exposeOnly(target)
+                // flush 原生 scroll 的旧邻页缓存，并将双面 curl 规范为同一静态配对。
+                if let settled = self.controllers(for: target) {
+                    vc.setViewControllers(settled, direction: direction, animated: false)
+                }
+                self.shown = target
+                self.exposeOnly(self.front(target))
                 self.phase = .idle
-                self.retiring.removeAll()
+                self.prune()
+                if chapterTurn && target.contentID != self.applied.contentID {
+                    self.beginAdoption(target)
+                    return
+                }
                 vc.view.isUserInteractionEnabled = true
                 self.configureDataSource()
-                self.publishCurrent(index, for: expectedGeneration)
-                if isContentUpdate { self.finishContentUpdate() }
+                self.publishCurrent(target)
+                if contentUpdate { self.finishContentUpdate() }
                 DispatchQueue.main.async { [weak self] in self?.drain() }
             }
         }
     }
 
-    private func publishCurrent(_ index: Int, for expected: UUID) {
+    private func publishCurrent(_ target: Key) {
+        // 调用点均已异步退出 UIKit 回调栈。先写同章 Binding，再 drain：pending 的
+        // Binding 因而也读取提交页码，不能被交互期间的旧 current 拉回起始页。
+        guard phase == .idle, adoption == nil, shown == target, valid(target),
+              target.contentID == applied.contentID,
+              pending == nil || pending?.contentID == target.contentID else { return }
         var model = applied
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.generation == expected,
-                  self.pending == nil || self.pending?.contentID == model.contentID else { return }
-            model.current = index
-        }
+        if model.current != target.index { model.current = target.index }
     }
 
     private func finishContentUpdate() {
         guard needsContentSettlement else { return }
         needsContentSettlement = false
-        let expected = generation
+        let id = applied.contentID
         let callback = applied.onContentTransitionCompleted
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.generation == expected,
-                  self.pending == nil || self.pending?.contentID == self.applied.contentID else { return }
+            guard let self, self.applied.contentID == id, self.adoption == nil,
+                  self.pending == nil || self.pending?.contentID == id else { return }
             callback()
         }
     }
 
-    // 原生单面阅读页：只提供相邻正文，不插入自制背面或占位页。
+    private func beginAdoption(_ target: Key) {
+        guard valid(target), target.contentID != applied.contentID,
+              let from = order.firstIndex(of: applied.contentID), let to = order.firstIndex(of: target.contentID) else { return }
+        let direction = to > from ? 1 : -1
+        let token = UUID()
+        let callback = applied.onChapterTransition // 与这次手势的冻结快照配对，而非 pending 的闭包。
+        publication = UUID()
+        pending = nil
+        turnGesture = nil
+        adoption = Adoption(token: token, target: target)
+        phase = .adoption(token)
+        vc?.view.isUserInteractionEnabled = false
+        // 此时可见的是邻章，但绝不把邻章页码写入旧章 Binding。
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.phase == .adoption(token), self.adoption?.target == target,
+                  self.shown == target, self.valid(target) else { return }
+            callback(direction, target.index)
+        }
+    }
+
     func pageViewController(_ pvc: UIPageViewController, viewControllerAfter controller: UIViewController) -> UIViewController? {
-        guard let face = controller as? ReaderPageHost, face.generation == generation else { return nil }
-        return front(face.pageIndex + 1)
+        guard let key = key(controller), valid(key) else { return nil }
+        if controller is ReaderPageBack { return front(key) }
+        guard let next = step(key, 1) else { return nil }
+        return applied.style == .curl ? back(before: next) : front(next)
     }
 
     func pageViewController(_ pvc: UIPageViewController, viewControllerBefore controller: UIViewController) -> UIViewController? {
-        guard let face = controller as? ReaderPageHost, face.generation == generation else { return nil }
-        return front(face.pageIndex - 1)
+        guard let key = key(controller), valid(key), let previous = step(key, -1) else { return nil }
+        if controller is ReaderPageBack { return front(previous) }
+        return applied.style == .curl ? back(before: key) : front(previous)
     }
 
     func pageViewController(_ pvc: UIPageViewController, willTransitionTo pendingViewControllers: [UIViewController]) {
-        guard phase == .idle else { return }
-        phase = .interactive
-        turnGesture = nil // 一次手势仅翻一页，倒二→末页不能接着跨章。
+        guard phase == .idle || phase == .tracking else { return }
+        interactionOrigin = shown
+        publication = UUID()
+        phase = .interactive(UUID())
+        turnGesture = nil // 一次手势只提交一页；倒二→末页不额外触发章末兜底。
     }
 
     func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool,
                             previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-        guard phase == .interactive else { return }
-        phase = .idle
-        if let face = visibleFront(), face.generation == generation {
-            shownIndex = face.pageIndex
-            exposeOnly(face)
-            publishCurrent(shownIndex, for: generation)
-            configureDataSource()
-        } else if shownIndex >= 0 {
-            install(index: shownIndex, direction: .forward, animated: false, isContentUpdate: false)
+        guard case .interactive(let token) = phase else { return }
+        let origin = interactionOrigin
+        interactionOrigin = nil
+        turnGesture = nil
+        // 退出 UIKit 的转场回调栈再更新数据源/SwiftUI，仍保持锁，禁止在回调内重入。
+        DispatchQueue.main.async { [weak self, weak pvc] in
+            guard let self, let pvc, self.phase == .interactive(token) else { return }
+            let visible = self.visibleFront()
+            let result = visible.flatMap { self.key($0) }
+            let committed = completed && result.map { self.valid($0) } == true
+            let target = committed ? result : origin
+            guard let target, self.valid(target) else {
+                self.phase = .idle
+                self.configureDataSource()
+                self.drain()
+                return
+            }
+            for face in previousViewControllers.compactMap({ $0 as? ReaderPageHost }) { face.setAccessibilityVisible(false) }
+            if !committed || result != target {
+                pvc.dataSource = nil
+                if let pair = self.controllers(for: target) { pvc.setViewControllers(pair, direction: .forward, animated: false) }
+            }
+            self.shown = target
+            self.exposeOnly(self.front(target))
+            self.phase = .idle
+            self.prune()
+            if committed && target.contentID != self.applied.contentID {
+                self.beginAdoption(target)
+            } else {
+                self.configureDataSource()
+                if committed { self.publishCurrent(target) }
+                self.drain()
+            }
         }
-        DispatchQueue.main.async { [weak self] in self?.drain() }
     }
 
     @objc func tapped(_ tap: UITapGestureRecognizer) {
@@ -188,22 +373,35 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
 
     @objc func panned(_ pan: UIPanGestureRecognizer) {
         switch pan.state {
-        case .began, .changed:
+        case .began:
+            if phase == .idle { phase = .tracking; publication = UUID() }
+            turnGesture?.record(pan.translation(in: pan.view))
+        case .changed:
             turnGesture?.record(pan.translation(in: pan.view))
         case .ended:
             let start = turnGesture
             turnGesture = nil
-            guard phase == .idle, var gesture = start, let view = pan.view,
-                  shownIndex == gesture.startIndex, applied.pages.count == gesture.pageCount else { return }
+            guard phase == .tracking else { return }
+            phase = .idle
+            guard var gesture = start, let view = pan.view, let shown,
+                  shown.contentID == applied.contentID, shown.index == gesture.startIndex,
+                  applied.pages.count == gesture.pageCount else { drain(); return }
             let translation = pan.translation(in: view)
             gesture.record(translation)
-            guard let delta = gesture.direction(translation: translation, velocity: pan.velocity(in: view),
-                                                 width: view.bounds.width) else { return }
-            if (delta > 0 && shownIndex == applied.pages.count - 1) || (delta < 0 && shownIndex == 0) {
+            if let delta = gesture.direction(translation: translation, velocity: pan.velocity(in: view), width: view.bounds.width),
+               step(shown, delta) == nil,
+               (delta > 0 && shown.index == applied.pages.count - 1) || (delta < 0 && shown.index == 0) {
                 requestEdge(delta)
+            } else {
+                // 已准备邻章只能由 UIKit 的 dataSource 原生交互进入，绝不 ended 后补动画。
+                DispatchQueue.main.async { [weak self] in self?.drain() }
             }
         case .cancelled, .failed:
             turnGesture = nil
+            if phase == .tracking {
+                phase = .idle
+                DispatchQueue.main.async { [weak self] in self?.drain() }
+            }
         default: break
         }
     }
@@ -219,8 +417,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
     func gestureRecognizer(_ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard phase == .idle else { return false }
         if recognizer is ChapterTurnPanObserver {
-            turnGesture = applied.pages.indices.contains(shownIndex)
-                ? ChapterTurnGesture(startIndex: shownIndex, pageCount: applied.pages.count) : nil
+            turnGesture = shown.map { ChapterTurnGesture(startIndex: $0.index, pageCount: applied.pages.count) }
             return turnGesture != nil
         }
         var view = touch.view
@@ -235,46 +432,39 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
     }
 
     private func go(_ delta: Int) {
-        guard phase == .idle, applied.pages.indices.contains(shownIndex) else { return }
+        guard phase == .idle, let shown, valid(shown) else { return }
         turnGesture = nil
-        let target = shownIndex + delta
-        guard applied.pages.indices.contains(target) else { requestEdge(delta); return }
-        install(index: target, direction: delta > 0 ? .forward : .reverse, animated: true, isContentUpdate: false)
+        guard let target = step(shown, delta) else { requestEdge(delta); return }
+        install(target, direction: delta > 0 ? .forward : .reverse, animated: true,
+                contentUpdate: false, chapterTurn: target.contentID != applied.contentID)
     }
 
     private func requestEdge(_ delta: Int) {
-        guard phase == .idle, let vc else { return }
+        guard phase == .idle, let vc, let requested = shown, valid(requested), step(requested, delta) == nil else { return }
         let token = UUID()
-        let expectedGeneration = generation
-        let requestedIndex = shownIndex
         phase = .edge(token)
+        publication = UUID()
         turnGesture = nil
         let deliver: () -> Void = { [weak self, weak vc] in
-            guard let self, let vc, self.phase == .edge(token), self.generation == expectedGeneration else { return }
-            // 两种原生容器都先结束章末交互。scroll 到边界还会回弹，缓存立即返回时
-            // 不能在回弹中叠加 setViewControllers(animated: true)，否则完成回调可能不来。
-            if let face = self.front(self.shownIndex) {
-                vc.dataSource = nil
-                vc.setViewControllers([face], direction: .forward, animated: false)
-                self.exposeOnly(face)
+            guard let self, let vc, self.phase == .edge(token), self.shown == requested, self.valid(requested) else { return }
+            // 仅无预分页邻章时走网络兜底。复位依旧遵守双面数组数量，避免回弹内再次动画。
+            vc.dataSource = nil
+            if let pair = self.controllers(for: requested) {
+                vc.setViewControllers(pair, direction: .forward, animated: false)
+                self.exposeOnly(self.front(requested))
             }
-            // 退出 UIKit 复位调用栈后才接收新章，避免立即命中的缓存与原手势抢同一轮更新。
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.phase == .edge(token), self.generation == expectedGeneration else { return }
+                guard let self, self.phase == .edge(token), self.shown == requested, self.valid(requested) else { return }
                 self.phase = .idle
                 self.configureDataSource()
                 if self.pending != nil { self.drain() }
-                guard self.phase == .idle, self.generation == expectedGeneration,
-                      self.shownIndex == requestedIndex,
-                      (delta > 0 && requestedIndex == self.applied.pages.count - 1)
-                        || (delta < 0 && requestedIndex == 0) else { return }
+                guard self.phase == .idle, self.shown == requested, self.valid(requested),
+                      self.step(requested, delta) == nil else { return }
                 self.applied.onEdge(delta)
             }
         }
         if let transition = vc.transitionCoordinator,
-           transition.animate(alongsideTransition: nil, completion: { _ in DispatchQueue.main.async(execute: deliver) }) {
-            return
-        }
+           transition.animate(alongsideTransition: nil, completion: { _ in DispatchQueue.main.async(execute: deliver) }) { return }
         DispatchQueue.main.async(execute: deliver)
     }
 }

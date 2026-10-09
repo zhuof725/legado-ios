@@ -44,7 +44,7 @@ jobs:
           set -o pipefail
           ARGS=()
           if [ "$TEST_SUITE" != full ]; then
-            ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests -only-testing:ReaderInteractionTests/InteractionTests)
+            ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests -only-testing:ReaderInteractionTests/TypographyTests -only-testing:ReaderInteractionTests/InteractionTests)
           fi
           xcodebuild -project Tools/ReaderInteractionTest/ReaderInteraction.xcodeproj \
             -scheme ReaderHarness -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
@@ -76,6 +76,9 @@ jobs:
                               if 'harness' in entry.lower(): report(entry, z.read(entry))
                   except Exception as error: print('diagnostics error', error)
           PY
+      - name: Export reader screenshots
+        if: always()
+        run: xcrun xcresulttool export attachments --path reader-interaction.xcresult --output-path reader-screenshots || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -83,3 +86,4 @@ jobs:
           path: |
             reader-interaction.log
             reader-interaction.xcresult
+            reader-screenshots
