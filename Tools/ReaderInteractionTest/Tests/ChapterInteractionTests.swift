@@ -8,12 +8,19 @@ final class ChapterInteractionTests: XCTestCase {
     private func checkPagedMode(_ mode: String) {
         let app = launch(mode)
         expect(app, chapter: 0, page: 0, edges: 0)
+        app.buttons["inspect-animation"].tap()
+        let initialID = app.staticTexts["animation-metrics"].label.components(separatedBy: ";id=").last
         drag(app, from: (0.84, 0.55), to: (0.16, 0.55))
         expect(app, chapter: 0, page: 1, edges: 0) // 到达末页本身不能跳章。
         drag(app, from: (0.50, 0.75), to: (0.50, 0.45))
         expect(app, chapter: 0, page: 1, edges: 0) // 垂直手势不是翻页。
         drag(app, from: (0.84, 0.55), to: (0.16, 0.55))
         expect(app, chapter: 1, page: 0, edges: 1)
+        XCTAssertTrue(app.staticTexts["reader-footer-title"].label.contains("第2章"))
+        app.buttons["inspect-animation"].tap()
+        let metrics = app.staticTexts["animation-metrics"].label
+        XCTAssertTrue(metrics.contains("style=\(mode);requests=1;ends=1;idle=true;front=0"), metrics)
+        XCTAssertEqual(metrics.components(separatedBy: ";id=").last, initialID)
         // 首屏往回正常翻页，回到上一章的末页。
         drag(app, from: (0.16, 0.55), to: (0.84, 0.55))
         expect(app, chapter: 0, page: 1, edges: 2)
@@ -27,6 +34,8 @@ final class ChapterInteractionTests: XCTestCase {
         expect(app, chapter: 2, page: 1, edges: 4)
         drag(app, from: (0.84, 0.55), to: (0.16, 0.55))
         expect(app, chapter: 2, page: 1, edges: 4) // 书尾不重开本章。
+        drag(app, from: (0.16, 0.55), to: (0.84, 0.55))
+        expect(app, chapter: 2, page: 0, edges: 4) // 复位必须恢复 dataSource。
     }
 
     func testScrollAdvancesOnlyAfterUserGesture() {
@@ -64,7 +73,7 @@ final class ChapterInteractionTests: XCTestCase {
     private func expect(_ app: XCUIApplication, chapter: Int, page: Int, edges: Int) {
         let element = app.staticTexts["chapter-state"]
         let prefix = "chapter=\(chapter);page=\(page);edges=\(edges);loading=false"
-        let predicate = NSPredicate(format: "label BEGINSWITH %@", prefix)
+        let predicate = NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", prefix, "locked=false")
         let result = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: element)], timeout: 8)
         XCTAssertEqual(result, .completed, "实际状态：\(element.label)")
     }

@@ -430,7 +430,11 @@ struct ReaderView: View {
         .onChange(of: settings.rightMargin) { _ in repaginate() }
         .onChange(of: settings.topMargin) { _ in repaginate() }
         .onChange(of: settings.bottomMargin) { _ in repaginate() }
-        .onChange(of: settings.pageMode) { _ in repaginate() }
+        .onChange(of: settings.pageMode) { _ in
+            pendingEdge = nil
+            pendingChapterDirection = 0
+            repaginate()
+        }
         .onChange(of: screenSize) { _ in repaginate() }
         .onDisappear {
             contentRequestID = nil
@@ -738,6 +742,7 @@ struct ReaderView: View {
             if contentRequestID == requestID {
                 contentRequestID = nil
                 loading = false
+                if settings.pageMode != 1 || pages.isEmpty { pendingChapterDirection = 0 }
                 if pendingChapterDirection == 0 { pendingEdge = nil }
                 chapterTask = nil
             }
@@ -787,7 +792,8 @@ struct ReaderView: View {
             }
             if let source = store.source(for: book.origin) { prefetch(source) }
         } catch is CancellationError {
-            // 离开阅读器后不再呈现旧请求的错误。
+            // 离开阅读器后不再呈现旧请求的错误，但取消路径也必须解锁。
+            if contentRequestID == requestID { pendingEdge = nil; pendingChapterDirection = 0 }
         } catch {
             guard contentRequestID == requestID else { return }
             self.error = "正文加载失败：\(error.localizedDescription)"
@@ -805,6 +811,9 @@ struct ReaderView: View {
         if currentVolume != nil { blocks = []; text = raw }
         else if hasRich { blocks = parsed; text = "" }
         else { blocks = []; text = WebBook.cleanText(raw) }
+        if currentVolume == nil && blocks.isEmpty && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            text = "（本章没有内容）"
+        }
         pages = []
         pageIndex = 0
         restorePermille = nil
