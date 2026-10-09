@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Search
 
@@ -158,6 +159,21 @@ struct ReaderView: View {
     @State private var showToc = false
     @State private var showSettings = false
     @State private var showBars = false
+    @State private var suppressNextBarTap = false
+
+    private func toggleBarsWithHaptic() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        showBars.toggle()
+    }
+
+    private func commentTapped(_ target: String?) {
+        suppressNextBarTap = true
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        openComment(target)
+        DispatchQueue.main.async {
+            suppressNextBarTap = false
+        }
+    }
 
     private var theme: (bg: Color, fg: Color, name: String) {
         ReadSettings.themes[min(max(settings.theme, 0), ReadSettings.themes.count - 1)]
@@ -234,7 +250,13 @@ struct ReaderView: View {
                     }
                     .onChange(of: loading) { _ in applyRestoreIfReady(proxy: proxy) }
                 }
-                .onTapGesture { showBars.toggle() }
+                .onTapGesture {
+                    if suppressNextBarTap {
+                        suppressNextBarTap = false
+                    } else {
+                        toggleBarsWithHaptic()
+                    }
+                }
             }
         }
         .navigationTitle(showBars ? book.name : "")
@@ -417,7 +439,7 @@ struct ReaderView: View {
                 lineSpacing: settings.lineSpacing, fg: theme.fg, bg: theme.bg,
                 title: chapters.indices.contains(index) ? chapters[index].title : "",
                 pageNumber: i + 1, pageCount: pages.count,
-                onTapComment: { openComment($0) }, safeInsets: pageInsets).ignoresSafeArea())
+                onTapComment: { commentTapped($0) }, safeInsets: pageInsets).ignoresSafeArea())
         }
     }
 
@@ -427,11 +449,11 @@ struct ReaderView: View {
             PageTurnView(pages: renderedPages, current: $pageIndex, style: turnStyle,
                          background: UIColor(theme.bg),
                          onEdge: { dir in DispatchQueue.main.async { goAcrossEdge(dir) } },
-                         onTapCenter: { showBars.toggle() })
+                         onTapCenter: { toggleBarsWithHaptic() })
         } else {
             InteractivePageTurnView(pages: renderedPages, current: $pageIndex, style: .fade,
                                     onEdge: { goAcrossEdge($0) },
-                                    onTapCenter: { showBars.toggle() })
+                                    onTapCenter: { toggleBarsWithHaptic() })
         }
     }
 
@@ -440,7 +462,7 @@ struct ReaderView: View {
         if pages.isEmpty {
             VStack { if loading { ProgressView() } else if let e = error { Text(e).foregroundStyle(.red) } else { Text("") } }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .onTapGesture { showBars.toggle() }
+                .onTapGesture { toggleBarsWithHaptic() }
         } else {
             pageTurnContainer
                 .id("\(settings.pageTurnStyle)-\(pageRevision)-\(index)-\(settings.theme)")
@@ -491,13 +513,13 @@ struct ReaderView: View {
                                     fontSize: settings.fontSize,
                                     lineSpacing: settings.lineSpacing,
                                     color: UIColor(theme.fg),
-                                    onTap: { openComment(url) })
+                                    onTap: { commentTapped(url) })
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .inlineBubble:
             EmptyView()
         case .image(let src, let click):
             ContentImageView(src: src)
-                .onTapGesture { openComment(click) }
+                .onTapGesture { commentTapped(click) }
         case .hotComment(let label, let t, let click):
             HStack(spacing: 10) {
                 Text(label).font(.system(size: max(settings.fontSize - 5, 11), weight: .bold)).foregroundStyle(.white)
@@ -510,7 +532,7 @@ struct ReaderView: View {
             .background(RoundedRectangle(cornerRadius: 22).fill(theme.fg.opacity(0.07)))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(theme.fg.opacity(0.12), lineWidth: 0.5))
             .contentShape(Rectangle())
-            .onTapGesture { openComment(click) }
+            .onTapGesture { commentTapped(click) }
         case .chapterComments(let title, let count, _, let click):
             HStack {
                 Text(title).font(.system(size: settings.fontSize - 2, weight: .bold))
@@ -520,7 +542,7 @@ struct ReaderView: View {
             .padding(.horizontal, 14).padding(.vertical, 12)
             .background(RoundedRectangle(cornerRadius: 16).fill(theme.fg.opacity(0.07)))
             .contentShape(Rectangle())
-            .onTapGesture { openComment(click) }
+            .onTapGesture { commentTapped(click) }
         }
     }
 

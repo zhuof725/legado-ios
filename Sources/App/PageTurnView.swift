@@ -201,6 +201,15 @@ struct PageTurnView: UIViewControllerRepresentable {
 
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            var view = touch.view
+            while let current = view {
+                if current is CommentTextView { return false }
+                view = current.superview
+            }
+            return true
+        }
+
         /// 点屏幕两侧翻页；淡入淡出时用交叉淡化，其余用系统动画。
         func go(_ delta: Int) {
             guard !transitioning else { return }
