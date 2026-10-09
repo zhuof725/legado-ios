@@ -14,8 +14,15 @@ targets:
     platform: iOS
     sources:
       - path: Harness.swift
+      - path: ChapterHarness.swift
       - path: ../../Sources/App/CommentViews.swift
       - path: ../../Sources/App/ReaderTextLayout.swift
+      - path: ../../Sources/App/PageTurnView.swift
+      - path: ../../Sources/App/InteractivePageTurnView.swift
+      - path: ../../Sources/App/ReaderScrollBoundaryObserver.swift
+      - path: ../../Sources/Engine/Paginator.swift
+      - path: ../../Sources/Engine/ContentBlocks.swift
+      - path: ../../Sources/Engine/ChapterNavigation.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.legado.readerharness

@@ -132,6 +132,12 @@ struct BookDetailView: View {
 
 // MARK: - Reader
 
+private enum ChapterLanding {
+    case start
+    case end
+    case saved(Int)
+}
+
 struct ReaderView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var settings: ReadSettings
@@ -151,7 +157,13 @@ struct ReaderView: View {
     @State private var pageInsets = EdgeInsets()
     @State private var pageRevision = 0
     @State private var pendingEdge: Int?
-    @State private var pendingLastPage = false
+    @State private var contentRequestID: UUID?
+    @State private var chapterTask: Task<Void, Never>?
+    @State private var pendingLanding: ChapterLanding?
+    @State private var retryTarget: Int?
+    @State private var retryLanding: ChapterLanding = .start
+    @State private var scrollResetRevision = 0
+    @State private var scrollStartPending = false
     @State private var contentHeight: CGFloat = 0
     @State private var viewportHeight: CGFloat = 0
     @Environment(\.scenePhase) private var scenePhase
@@ -200,10 +212,14 @@ struct ReaderView: View {
                                 blockView(block)
                             }
                             if !chapters.isEmpty {
-                                HStack {
-                                    Button("上一章") { go(index - 1) }.disabled(index <= 0)
-                                    Spacer()
-                                    Button("下一章") { go(index + 1) }.disabled(index >= chapters.count - 1)
+                                VStack(spacing: 8) {
+                                    HStack {
+                                        Button("上一章") { goAcrossEdge(-1) }.disabled(previousChapter == nil || loading)
+                                        Spacer()
+                                        Button("下一章") { goAcrossEdge(1) }.disabled(nextChapter == nil || loading)
+                                    }
+                                    Text(nextChapter == nil ? "已到最后一章" : "继续上滑，自动阅读下一章")
+                                        .font(.caption).foregroundStyle(theme.fg.opacity(0.5))
                                 }
                                 .padding(.vertical, 24)
                             }
@@ -214,6 +230,13 @@ struct ReaderView: View {
                         .background(GeometryReader { g in
                             Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
                         })
+                        .background {
+                            ReaderScrollBoundaryObserver(chapterID: String(index),
+                                isEnabled: !loading && pendingEdge == nil && restorePermille == nil
+                                    && !scrollStartPending && nextChapter != nil && retryTarget == nil
+                                    && !showToc && !showSettings && commentURL == nil && !commentBusy,
+                                onNext: { goAcrossEdge(1) })
+                        }
                         // 等间距透明锚点：位置恢复时按比例选一个滚过去。锚点只占背景，不影响排版。
                         .background(alignment: .top) {
                             GeometryReader { g in
@@ -239,9 +262,17 @@ struct ReaderView: View {
                     }
                     .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
                     .onPreferenceChange(ScrollOffsetKey.self) { offset in recordScroll(offset) }
-                    .onChange(of: index) { _ in
-                        restorePermille = nil
-                        proxy.scrollTo("top", anchor: .top)
+                    .onChange(of: scrollResetRevision) { _ in
+                        if restorePermille != nil {
+                            applyRestoreIfReady(proxy: proxy)
+                        } else {
+                            let revision = scrollResetRevision
+                            DispatchQueue.main.async {
+                                guard revision == scrollResetRevision else { return }
+                                withAnimation(nil) { proxy.scrollTo("top", anchor: .top) }
+                                scrollStartPending = false
+                            }
+                        }
                     }
                     .onChange(of: loading) { _ in applyRestoreIfReady(proxy: proxy) }
                 }
@@ -353,13 +384,44 @@ struct ReaderView: View {
             }
             .presentationDetents([.medium])
         }
+        .overlay {
+            if loading && (!text.isEmpty || !blocks.isEmpty || !pages.isEmpty) {
+                ZStack {
+                    Color.clear.contentShape(Rectangle())
+                    ProgressView("正在加载章节…")
+                        .padding(18).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let target = retryTarget, !loading {
+                VStack(spacing: 8) {
+                    Text(error ?? "章节加载失败").font(.caption).lineLimit(2)
+                    HStack {
+                        Button("重试加载") { loadChapter(target, landing: retryLanding) }
+                        Button("留在本章") { retryTarget = nil; error = nil }
+                    }
+                }
+                .padding().frame(maxWidth: .infinity).background(.regularMaterial)
+            }
+        }
         .sheet(item: $commentURL) { link in CommentSheet(url: link) }
         .onChange(of: scenePhase) { phase in if phase != .active { store.flushProgress() } }
         .onChange(of: settings.fontSize) { _ in repaginate() }
         .onChange(of: settings.lineSpacing) { _ in repaginate() }
         .onChange(of: settings.pageMode) { _ in repaginate() }
         .onChange(of: screenSize) { _ in repaginate() }
-        .onDisappear { store.flushProgress() }
+        .onDisappear {
+            contentRequestID = nil
+            chapterTask?.cancel()
+            chapterTask = nil
+            pendingEdge = nil
+            loading = false
+            restorePermille = nil
+            pendingLanding = nil
+            scrollStartPending = false
+            store.flushProgress()
+        }
         .task { await start() }
     }
 
@@ -382,9 +444,13 @@ struct ReaderView: View {
             }
         }
         if chapters.isEmpty { error = "目录为空，书源可能不兼容"; loading = false; return }
-        index = readableIndex(from: index, direction: 1) ?? 0
-        restorePermille = store.scrollPosition(book) > 0 ? store.scrollPosition(book) : nil
-        await loadContent()
+        let initial = min(max(index, 0), chapters.count - 1)
+        guard let first = readableIndex(from: initial, direction: 1)
+                ?? readableIndex(from: initial, direction: -1) else {
+            error = "目录中没有可读章节"; loading = false; return
+        }
+        index = first
+        await loadInitialChapter()
     }
 
     private func startLocal() async {
@@ -392,23 +458,20 @@ struct ReaderView: View {
         guard let toc = store.localToc(book), !toc.isEmpty else { error = "本地书文件已丢失，请重新导入"; loading = false; return }
         chapters = toc
         index = min(max(index, 0), toc.count - 1)
-        restorePermille = store.scrollPosition(book) > 0 ? store.scrollPosition(book) : nil
-        loadLocalContent()
+        await loadInitialChapter()
     }
 
-    private func loadLocalContent() {
-        guard index < chapters.count else { return }
-        let c = chapters[index]
-        store.updateProgress(book, index: index, title: c.title)
-        error = nil
-        let raw = store.localContent(book, index: index) ?? ""
-        loading = false
-        if raw.isEmpty { text = "（本章没有内容）"; blocks = [] } else { show(raw: raw) }
+    private func loadInitialChapter() async {
+        let saved = store.scrollPosition(book)
+        let requestID = UUID()
+        contentRequestID = requestID
+        loading = true
+        await loadContent(at: index, landing: saved > 0 ? .saved(saved) : .start, requestID: requestID)
     }
 
     /// 记录滚动位置（千分比）。内容还没排好、或正在恢复位置时不记录，避免把 0 写回去覆盖已存的位置。
     private func recordScroll(_ offset: CGFloat) {
-        guard !loading, restorePermille == nil else { return }
+        guard !loading, restorePermille == nil, !scrollStartPending, retryTarget == nil else { return }
         let scrollable = contentHeight - viewportHeight
         guard scrollable > 40 else { return }
         let p = Int((min(max(offset, 0), scrollable) / scrollable) * 1000)
@@ -417,12 +480,17 @@ struct ReaderView: View {
 
     /// 内容加载并排版完成后，滚到上次保存的位置（只恢复一次）。
     private func applyRestoreIfReady(proxy: ScrollViewProxy) {
-        guard let target = restorePermille, !loading, contentHeight > viewportHeight + 40 else { return }
-        restorePermille = nil
-        // 内容后面铺了 101 个等间距的透明锚点（0...100），选最接近的一个，把它对齐到视口顶部。
+        guard let target = restorePermille, !loading, viewportHeight > 0, contentHeight > 0 else { return }
+        let chapter = index
+        let revision = scrollResetRevision
         let slot = min(max(Int((Double(target) / 10).rounded()), 0), 100)
         DispatchQueue.main.async {
-            withAnimation(nil) { proxy.scrollTo("slot-\(slot)", anchor: .top) }
+            guard chapter == index, revision == scrollResetRevision, restorePermille == target else { return }
+            withAnimation(nil) {
+                proxy.scrollTo(contentHeight > viewportHeight + 40 ? "slot-\(slot)" : "top", anchor: .top)
+            }
+            restorePermille = nil
+            scrollStartPending = false
         }
     }
 
@@ -445,6 +513,16 @@ struct ReaderView: View {
         pages = ReaderPaginator.paginate(source, configuration: configuration)
         pageRevision += 1
         pageIndex = Paginator.pageIndex(containing: offset, in: pages)
+        if !pages.isEmpty, let landing = pendingLanding {
+            switch landing {
+            case .start: pageIndex = 0
+            case .end: pageIndex = pages.count - 1
+            case .saved(let permille):
+                let total = max((pages.last?.startOffset ?? 0) + 1, 1)
+                pageIndex = Paginator.pageIndex(containing: Int(Double(total) * Double(permille) / 1000), in: pages)
+            }
+            pendingLanding = nil
+        }
     }
 
     private var readingBlocks: [ContentBlock] {
@@ -499,19 +577,21 @@ struct ReaderView: View {
 
     /// 翻页模式的位置 = 当前页第一个字的字符偏移；换算成千分比存进已有的 durChapterPos，滚动模式也能读。
     private func recordPage(_ i: Int) {
-        guard pages.indices.contains(i), let last = pages.last else { return }
+        guard !loading, retryTarget == nil, pages.indices.contains(i), let last = pages.last else { return }
         let total = max(last.startOffset + 1, 1)
         store.updateScrollPosition(book, permille: Int(Double(pages[i].startOffset) / Double(total) * 1000))
     }
 
+    private var nextChapter: Int? { readableIndex(from: index + 1, direction: 1) }
+    private var previousChapter: Int? { readableIndex(from: index - 1, direction: -1) }
+
     private func goAcrossEdge(_ dir: Int) {
-        guard pendingEdge == nil else { return }
-        let target = index + dir
-        guard chapters.indices.contains(target) else { return }
-        pendingEdge = dir
-        pendingLastPage = dir < 0
-        go(target)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { pendingEdge = nil }
+        guard !loading, pendingEdge == nil, !showToc, !showSettings, commentURL == nil, !commentBusy else { return }
+        let step = dir > 0 ? 1 : -1
+        guard let target = readableIndex(from: index + step, direction: step) else { return }
+        // 必须直到这次请求成功/失败才解锁，不能用固定 0.6 秒窗口。
+        pendingEdge = step
+        loadChapter(target, landing: step < 0 && settings.pageMode == 1 ? .end : .start)
     }
 
     /// 点击评论：网址直接弹评论页；`js:` 开头是书源函数调用，先在后台执行拿到网址。
@@ -574,65 +654,125 @@ struct ReaderView: View {
     }
 
     private func readableIndex(from value: Int, direction: Int) -> Int? {
-        guard !chapters.isEmpty else { return nil }
-        var i = min(max(value, 0), chapters.count - 1)
-        while chapters[i].isVolume || chapters[i].url.isEmpty {
-            i += direction
-            if i < 0 || i >= chapters.count { return nil }
+        ChapterNavigation.readableIndex(from: value, direction: direction, count: chapters.count) {
+            !chapters[$0].isVolume && !chapters[$0].url.isEmpty
         }
-        return i
     }
 
     private func go(_ i: Int) {
-        guard let target = readableIndex(from: i, direction: i >= index ? 1 : -1) else { return }
-        index = target
-        Task { await loadContent() }
+        guard !loading, let target = readableIndex(from: i, direction: i >= index ? 1 : -1) else { return }
+        loadChapter(target, landing: .start)
     }
 
-    private func loadContent() async {
-        if store.isLocal(book) { loadLocalContent(); return }
-        guard let s = store.source(for: book.origin), index < chapters.count else { return }
-        let c = chapters[index]
-        store.updateProgress(book, index: index, title: c.title)
+    private func loadChapter(_ target: Int, landing: ChapterLanding) {
+        guard !loading, chapters.indices.contains(target) else { return }
+        chapterTask?.cancel()
+        let requestID = UUID()
+        contentRequestID = requestID
+        retryTarget = nil
         error = nil
-        if let cached = store.cachedContent(c) { show(raw: cached); loading = false; prefetch(s); return }
+        // 同一主线程回调立即上锁；不等 Task 启动后才设置 loading。
         loading = true
-        text = ""
-        blocks = []
-        do {
-            let next = index + 1 < chapters.count ? chapters[index + 1].url : nil
-            let r = try await WebBook.contentBlocks(source: s, chapter: c, nextChapterUrl: next, book: book)
-            if r.raw.isEmpty { text = "（正文为空，书源可能不兼容）" } else { show(raw: r.raw) }
-            store.saveContent(c, r.raw)
-        } catch {
-            self.error = "正文加载失败：\(error.localizedDescription)"
+        chapterTask = Task { await loadContent(at: target, landing: landing, requestID: requestID) }
+    }
+
+    private func loadContent(at target: Int, landing: ChapterLanding, requestID: UUID) async {
+        defer {
+            if contentRequestID == requestID {
+                contentRequestID = nil
+                loading = false
+                pendingEdge = nil
+                chapterTask = nil
+            }
         }
-        loading = false
-        prefetch(s)
+        guard chapters.indices.contains(target), contentRequestID == requestID else { return }
+        let chapter = chapters[target]
+        do {
+            let raw: String
+            if store.isLocal(book) {
+                guard let local = store.localContent(book, index: target) else {
+                    throw NSError(domain: "Reader", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey: "本地章节文件不存在"])
+                }
+                raw = local.isEmpty ? "（本章没有内容）" : local
+            } else {
+                guard let source = store.source(for: book.origin) else {
+                    throw NSError(domain: "Reader", code: 2,
+                                  userInfo: [NSLocalizedDescriptionKey: "找不到书源"])
+                }
+                if let cached = store.cachedContent(chapter), !cached.isEmpty {
+                    raw = cached
+                } else {
+                    let next = readableIndex(from: target + 1, direction: 1).map { chapters[$0].url }
+                    let result = try await WebBook.contentBlocks(source: source, chapter: chapter,
+                                                               nextChapterUrl: next, book: book)
+                    try Task.checkCancellation()
+                    guard contentRequestID == requestID else { return }
+                    store.saveContent(chapter, result.raw)
+                    raw = result.raw.isEmpty ? "（正文为空，书源可能不兼容）" : result.raw
+                }
+            }
+            try Task.checkCancellation()
+            guard contentRequestID == requestID else { return }
+            // 网络失败时不改章号、不清旧文、不覆盖已保存的阅读位置。
+            index = target
+            retryTarget = nil
+            error = nil
+            show(raw: raw, landing: landing)
+            store.updateProgress(book, index: target, title: chapter.title)
+            if settings.pageMode == 1, pages.indices.contains(pageIndex) {
+                let total = max((pages.last?.startOffset ?? 0) + 1, 1)
+                store.updateScrollPosition(book, permille: Int(Double(pages[pageIndex].startOffset) / Double(total) * 1000))
+            } else {
+                let position: Int
+                switch landing {
+                case .start: position = 0
+                case .end: position = 1000
+                case .saved(let value): position = value
+                }
+                store.updateScrollPosition(book, permille: position)
+            }
+            if let source = store.source(for: book.origin) { prefetch(source) }
+        } catch is CancellationError {
+            // 离开阅读器后不再呈现旧请求的错误。
+        } catch {
+            guard contentRequestID == requestID else { return }
+            self.error = "正文加载失败：\(error.localizedDescription)"
+            retryTarget = target
+            retryLanding = landing
+        }
     }
 
     /// 缓存里存的是规则输出的原始文本（可能带 <comment>/<img>）；旧缓存是纯文本，同样能解析。
-    private func show(raw: String) {
+    private func show(raw: String, landing: ChapterLanding) {
         let parsed = ContentBlocks.parse(raw)
         let hasRich = parsed.contains { if case .paragraph(_, let c, _) = $0 { return c > 0 }; if case .paragraph = $0 { return false }; return true }
         if hasRich { blocks = parsed; text = "" }
         else { blocks = []; text = WebBook.cleanText(raw) }
-        // 翻页模式：按保存的位置（千分比）或上/下一章边界决定落在哪一页。
-        let permille = restorePermille ?? 0
-        repaginate(keepOffset: 0)
-        if settings.pageMode == 1, !pages.isEmpty {
-            if pendingLastPage { pageIndex = pages.count - 1; pendingLastPage = false }
-            else if permille > 0, let last = pages.last { pageIndex = Paginator.pageIndex(containing: Int(Double(last.startOffset + 1) * Double(permille) / 1000), in: pages); restorePermille = nil }
-            else { pageIndex = 0 }
+        pages = []
+        pageIndex = 0
+        restorePermille = nil
+        if settings.pageMode == 1 {
+            pendingLanding = landing
+            repaginate(keepOffset: 0)
+        } else {
+            pendingLanding = nil
+            switch landing {
+            case .start: break
+            case .end: restorePermille = 1000
+            case .saved(let position): restorePermille = position
+            }
+            // 等 SwiftUI 排好新章后再恢复，禁止旧章惯性驱动下一次换章。
+            scrollStartPending = true
+            scrollResetRevision += 1
         }
     }
 
     private func prefetch(_ s: BookSource) {
-        let i = index + 1
-        guard i < chapters.count else { return }
+        guard let i = nextChapter else { return }
         let c = chapters[i]
         if store.cachedContent(c) != nil { return }
-        let next = i + 1 < chapters.count ? chapters[i + 1].url : nil
+        let next = readableIndex(from: i + 1, direction: 1).map { chapters[$0].url }
         Task {
             if let r = try? await WebBook.contentBlocks(source: s, chapter: c, nextChapterUrl: next, book: book) { store.saveContent(c, r.raw) }
         }

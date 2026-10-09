@@ -7,7 +7,15 @@ enum WebViewSupport { static let userAgent = "ReaderInteractionTests" }
 
 @main
 struct HarnessApp: App {
-    var body: some Scene { WindowGroup { HarnessView() } }
+    var body: some Scene {
+        WindowGroup {
+            if let mode = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--chapter-mode=") }) {
+                ChapterHarnessView(mode: String(mode.dropFirst("--chapter-mode=".count)))
+            } else {
+                HarnessView()
+            }
+        }
+    }
 }
 
 struct HarnessView: View {
