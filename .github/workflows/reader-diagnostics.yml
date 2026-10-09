@@ -1,0 +1,43 @@
+name: Reader crash diagnostics
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/source-compat-runtime]
+    paths: ['.github/workflows/reader-diagnostics.yml']
+permissions:
+  actions: read
+  contents: read
+jobs:
+  diagnose:
+    runs-on: macos-15
+    timeout-minutes: 6
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: reader-interaction-results
+          run-id: 37943319805
+          github-token: ${{ github.token }}
+      - name: Export simulator diagnostics
+        run: |
+          xcrun xcresulttool export diagnostics --path reader-interaction.xcresult --output-path diagnostics
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          for path in list(Path('diagnostics').rglob('*.zip')):
+              with zipfile.ZipFile(path) as z:
+                  for name in z.namelist():
+                      if any(t in name.lower() for t in ['readerharness', 'standardoutput', 'standarderror']):
+                          data=z.read(name)
+                          if len(data)<2000000:
+                              print(name)
+                              text=data.decode('utf-8','replace')
+                              for line in text.splitlines():
+                                  if any(t in line.lower() for t in ['exception','reason:','assert','pageview','pageturn','readerpage','fatal']):print(line[:1200])
+          for path in Path('diagnostics').rglob('*'):
+              if path.is_file() and path.suffix in ['.ips','.crash']:
+                  print(path, path.read_text(errors='replace')[:12000])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reader-crash-diagnostics
+          path: diagnostics
