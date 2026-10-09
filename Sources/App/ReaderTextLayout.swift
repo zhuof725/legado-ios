@@ -5,10 +5,11 @@ import UIKit
 enum ReaderTextLayout {
     static func attributedText(text: String, count: Int, fontSize: CGFloat,
                                lineSpacing: CGFloat, color: UIColor,
+                               paragraphSpacing: CGFloat = 0,
                                continuation: Bool = false) -> NSAttributedString {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = lineSpacing
-        style.paragraphSpacing = 0
+        style.paragraphSpacing = paragraphSpacing
         style.alignment = .natural
         style.firstLineHeadIndent = continuation ? 0 : fontSize * 2
         let attrs: [NSAttributedString.Key: Any] = [
@@ -67,10 +68,10 @@ enum ReaderTextLayout {
             ReaderTextLayout.configure(view)
         }
         func height(text: String, count: Int, width: CGFloat, fontSize: CGFloat,
-                    lineSpacing: CGFloat, continuation: Bool) -> CGFloat {
+                    lineSpacing: CGFloat, paragraphSpacing: CGFloat = 0, continuation: Bool = false) -> CGFloat {
             view.attributedText = ReaderTextLayout.attributedText(
                 text: text, count: count, fontSize: fontSize, lineSpacing: lineSpacing,
-                color: .black, continuation: continuation)
+                color: .black, paragraphSpacing: paragraphSpacing, continuation: continuation)
             return ReaderTextLayout.height(of: view, width: width)
         }
     }

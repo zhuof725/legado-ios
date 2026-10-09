@@ -8,20 +8,27 @@ enum ReaderPaginator {
         var safeInsets: UIEdgeInsets = .zero
         var fontSize: CGFloat
         var lineSpacing: CGFloat
-        var horizontalInset: CGFloat = 20
+        var paragraphSpacing: CGFloat = 2
+        var leftInset: CGFloat = 20
+        var rightInset: CGFloat = 20
         var topInset: CGFloat = 16
         var bottomInset: CGFloat = 10
+        var headerHeight: CGFloat = 0
         /// PageContentView 底部页码栏的保留高度。
         var footerHeight: CGFloat = 16
         var blockSpacing: CGFloat = 2
 
         var textWidth: CGFloat {
-            max(pageSize.width - horizontalInset * 2, 1)
+            max(pageSize.width - leftInset - rightInset, 1)
         }
 
         var bodyHeight: CGFloat {
             max(pageSize.height - safeInsets.top - safeInsets.bottom
                 - topInset - bottomInset - footerHeight, 1)
+        }
+
+        var firstPageBodyHeight: CGFloat {
+            max(bodyHeight - headerHeight, 1)
         }
     }
 
@@ -32,7 +39,6 @@ enum ReaderPaginator {
         guard !blocks.isEmpty else { return [] }
         let measurer = ReaderTextLayout.Measurer()
         let width = configuration.textWidth
-        let capacity = configuration.bodyHeight
         var pages: [BookPage] = []
         var pageBlocks: [ContentBlock] = []
         var pageHeights: [Double] = []
@@ -70,6 +76,7 @@ enum ReaderPaginator {
                 var continuation = false
                 while index < chars.count {
                     let remaining = chars.count - index
+                    let capacity = pageBlocks.isEmpty ? configuration.firstPageBodyHeight : configuration.bodyHeight
                     let room = capacity - used - (pageBlocks.isEmpty ? 0 : configuration.blockSpacing)
                     if room <= 0.5, !pageBlocks.isEmpty {
                         flush()
@@ -95,6 +102,7 @@ enum ReaderPaginator {
                                              count: mid, commentCount: 0, width: width,
                                              fontSize: configuration.fontSize,
                                              lineSpacing: configuration.lineSpacing,
+                                             paragraphSpacing: configuration.paragraphSpacing,
                                              continuation: continuation)
                             if h + (pageBlocks.isEmpty ? 0 : configuration.blockSpacing) <= capacity - used + 0.01 {
                                 best = mid
@@ -117,6 +125,7 @@ enum ReaderPaginator {
                     let h = measured(measurer: measurer, chars: chars, start: index, count: take,
                                      commentCount: isLast ? commentCount : 0, width: width,
                                      fontSize: configuration.fontSize, lineSpacing: configuration.lineSpacing,
+                                     paragraphSpacing: configuration.paragraphSpacing,
                                      continuation: continuation)
                     if used + h + (pageBlocks.isEmpty ? 0 : configuration.blockSpacing) > capacity + 0.01,
                        !pageBlocks.isEmpty {
@@ -134,6 +143,7 @@ enum ReaderPaginator {
                 }
             default:
                 let h = nonTextHeight(block, configuration: configuration)
+                let capacity = pageBlocks.isEmpty ? configuration.firstPageBodyHeight : configuration.bodyHeight
                 if used + h + (pageBlocks.isEmpty ? 0 : configuration.blockSpacing) > capacity + 0.01,
                    !pageBlocks.isEmpty {
                     flush()
@@ -147,10 +157,11 @@ enum ReaderPaginator {
 
     private static func measured(measurer: ReaderTextLayout.Measurer, chars: [Character], start: Int,
                                  count: Int, commentCount: Int, width: CGFloat, fontSize: CGFloat,
-                                 lineSpacing: CGFloat, continuation: Bool) -> CGFloat {
+                                 lineSpacing: CGFloat, paragraphSpacing: CGFloat, continuation: Bool) -> CGFloat {
         let text = String(chars[start..<(start + count)])
         return measurer.height(text: text, count: commentCount, width: width, fontSize: fontSize,
-                               lineSpacing: lineSpacing, continuation: continuation)
+                               lineSpacing: lineSpacing, paragraphSpacing: paragraphSpacing,
+                               continuation: continuation)
     }
 
     private static func measuredHeight(measurer: ReaderTextLayout.Measurer, chars: [Character], start: Int,
@@ -159,6 +170,7 @@ enum ReaderPaginator {
         let h = measured(measurer: measurer, chars: chars, start: start, count: count,
                          commentCount: isLast ? commentCount : 0, width: width,
                          fontSize: configuration.fontSize, lineSpacing: configuration.lineSpacing,
+                         paragraphSpacing: configuration.paragraphSpacing,
                          continuation: start > 0)
         return h <= room + 0.01
     }

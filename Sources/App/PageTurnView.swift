@@ -28,16 +28,28 @@ struct PageContentView: View {
     let pageCount: Int
     let onTapComment: (String?) -> Void
     var safeInsets = EdgeInsets()
+    var paragraphSpacing: Double = 2
+    var leftMargin: Double = 20
+    var rightMargin: Double = 20
+    var topMargin: Double = 16
+    var bottomMargin: Double = 10
     var volumeTitle: String? = nil
+    var showsChapterTitle = false
 
     var body: some View {
         ZStack(alignment: .top) {
             bg.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: CGFloat(paragraphSpacing)) {
                 if let volumeTitle {
                     Spacer(minLength: 0)
                     VolumeTitleView(title: volumeTitle, foreground: fg)
                 } else {
+                if showsChapterTitle && pageNumber == 1 {
+                    Text(title)
+                        .font(.system(size: max(fontSize + 2, 20), weight: .semibold))
+                        .lineLimit(2)
+                        .padding(.bottom, CGFloat(paragraphSpacing))
+                }
                 ForEach(Array(page.blocks.enumerated()), id: \.offset) { blockIndex, block in
                     switch block {
                     case .paragraph(let t, let count, let url):
@@ -45,6 +57,7 @@ struct PageContentView: View {
                         InlineCommentParagraph(text: t, count: count,
                                                 fontSize: fontSize,
                                                 lineSpacing: lineSpacing,
+                                                paragraphSpacing: paragraphSpacing,
                                                 color: UIColor(fg),
                                                 continuation: continuation,
                                                 onTap: { onTapComment(url) })
@@ -86,9 +99,10 @@ struct PageContentView: View {
                 .foregroundStyle(fg.opacity(0.45))
             }
             .foregroundStyle(fg)
-            .padding(.horizontal, 20)
-            .padding(.top, safeInsets.top + 16)
-            .padding(.bottom, safeInsets.bottom + 10)
+            .padding(.leading, leftMargin)
+            .padding(.trailing, rightMargin)
+            .padding(.top, safeInsets.top + CGFloat(topMargin))
+            .padding(.bottom, safeInsets.bottom + CGFloat(bottomMargin))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea()

@@ -212,6 +212,11 @@ final class AppStore: ObservableObject {
 final class ReadSettings: ObservableObject {
     @AppStorage("fontSize") var fontSize: Double = 19
     @AppStorage("lineSpacing") var lineSpacing: Double = 8
+    @AppStorage("paragraphSpacing") var paragraphSpacing: Double = 2
+    @AppStorage("leftMargin") var leftMargin: Double = 20
+    @AppStorage("rightMargin") var rightMargin: Double = 20
+    @AppStorage("topMargin") var topMargin: Double = 16
+    @AppStorage("bottomMargin") var bottomMargin: Double = 10
     @AppStorage("theme") var theme: Int = 0
     @AppStorage("pageMode") var pageMode: Int = 0 // 0 滚动 1 翻页
     @AppStorage("pageTurnStyle") var pageTurnStyle: Int = 0 // 0 滑动 1 卷页 2 淡入淡出

@@ -141,18 +141,20 @@ struct InlineCommentParagraph: UIViewRepresentable {
     let count: Int
     let fontSize: CGFloat
     let lineSpacing: CGFloat
+    let paragraphSpacing: CGFloat
     let color: UIColor
     let continuation: Bool
     let onTextTap: (() -> Void)?
     let onTap: () -> Void
 
     init(text: String, count: Int, fontSize: CGFloat, lineSpacing: CGFloat,
-         color: UIColor, continuation: Bool = false, onTextTap: (() -> Void)? = nil,
+         paragraphSpacing: CGFloat = 0, color: UIColor, continuation: Bool = false, onTextTap: (() -> Void)? = nil,
          onTap: @escaping () -> Void) {
         self.text = text
         self.count = count
         self.fontSize = fontSize
         self.lineSpacing = lineSpacing
+        self.paragraphSpacing = paragraphSpacing
         self.color = color
         self.continuation = continuation
         self.onTextTap = onTextTap
@@ -172,7 +174,7 @@ struct InlineCommentParagraph: UIViewRepresentable {
         view.onBubbleTap = onTap
         view.onTextTap = onTextTap
         view.render(text: text, count: count, fontSize: fontSize, lineSpacing: lineSpacing,
-                    color: color, continuation: continuation)
+                    paragraphSpacing: paragraphSpacing, color: color, continuation: continuation)
     }
 
     @available(iOS 16.0, *)
@@ -228,13 +230,14 @@ final class CommentTextView: UITextView, UIGestureRecognizerDelegate {
     }
 
     func render(text: String, count: Int, fontSize: CGFloat, lineSpacing: CGFloat,
-                color: UIColor, continuation: Bool = false) {
-        let key = "\(text)|\(count)|\(fontSize)|\(lineSpacing)|\(continuation)|\(color)"
+                paragraphSpacing: CGFloat = 0, color: UIColor, continuation: Bool = false) {
+        let key = "\(text)|\(count)|\(fontSize)|\(lineSpacing)|\(paragraphSpacing)|\(continuation)|\(color)"
         guard key != lastRenderKey else { return }
         lastRenderKey = key
         let result = ReaderTextLayout.attributedText(text: text, count: count,
                                                       fontSize: fontSize, lineSpacing: lineSpacing,
-                                                      color: color, continuation: continuation)
+                                                      color: color, paragraphSpacing: paragraphSpacing,
+                                                      continuation: continuation)
         bubbleIndex = count > 0 ? result.length - 1 : nil
         attributedText = result
         textContainerInset = .zero

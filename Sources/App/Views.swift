@@ -199,7 +199,7 @@ struct ReaderView: View {
             } else {
             ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: CGFloat(settings.paragraphSpacing)) {
                             Color.clear.frame(height: 1).id("top")
                                 .background(GeometryReader { g in
                                     Color.clear.preference(key: ScrollOffsetKey.self, value: -g.frame(in: .named("reader")).minY)
@@ -211,7 +211,9 @@ struct ReaderView: View {
                                     .onTapGesture { toggleBars() }
                             } else {
                                 if !chapters.isEmpty, index < chapters.count {
-                                    Text(chapters[index].title).font(.title3.bold())
+                                    Text(chapters[index].title)
+                                        .font(.system(size: max(settings.fontSize + 2, 20), weight: .semibold))
+                                        .padding(.bottom, CGFloat(settings.paragraphSpacing))
                                 }
                                 ForEach(Array(readingBlocks.enumerated()), id: \.offset) { _, block in
                                     blockView(block)
@@ -233,7 +235,10 @@ struct ReaderView: View {
                             }
                         }
                         .foregroundStyle(theme.fg)
-                        .padding(.horizontal, 20)
+                        .padding(.leading, CGFloat(settings.leftMargin))
+                        .padding(.trailing, CGFloat(settings.rightMargin))
+                        .padding(.top, CGFloat(settings.topMargin))
+                        .padding(.bottom, CGFloat(settings.bottomMargin))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(GeometryReader { g in
                             Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
@@ -379,8 +384,19 @@ struct ReaderView: View {
                             .pickerStyle(.segmented)
                         }
                     }
-                    Section("字号 \(Int(settings.fontSize))") { Slider(value: $settings.fontSize, in: 12...32, step: 1) }
-                    Section("行距 \(Int(settings.lineSpacing))") { Slider(value: $settings.lineSpacing, in: 0...24, step: 1) }
+                    Section("字号 \(Int(settings.fontSize))") {
+                        HStack {
+                            Button { settings.fontSize = max(12, settings.fontSize - 1) } label: { Image(systemName: "minus.circle") }
+                            Slider(value: $settings.fontSize, in: 12...36, step: 1)
+                            Button { settings.fontSize = min(36, settings.fontSize + 1) } label: { Image(systemName: "plus.circle") }
+                        }
+                    }
+                    Section("行距 \(Int(settings.lineSpacing))") { Slider(value: $settings.lineSpacing, in: 0...30, step: 1) }
+                    Section("段间距 \(Int(settings.paragraphSpacing))") { Slider(value: $settings.paragraphSpacing, in: 0...30, step: 1) }
+                    Section("左边距 \(Int(settings.leftMargin))") { Slider(value: $settings.leftMargin, in: 0...60, step: 1) }
+                    Section("右边距 \(Int(settings.rightMargin))") { Slider(value: $settings.rightMargin, in: 0...60, step: 1) }
+                    Section("上边距 \(Int(settings.topMargin))") { Slider(value: $settings.topMargin, in: 0...80, step: 1) }
+                    Section("下边距 \(Int(settings.bottomMargin))") { Slider(value: $settings.bottomMargin, in: 0...80, step: 1) }
                     Section("背景") {
                         Picker("主题", selection: $settings.theme) {
                             ForEach(0..<ReadSettings.themes.count, id: \.self) { Text(ReadSettings.themes[$0].name).tag($0) }
@@ -418,6 +434,11 @@ struct ReaderView: View {
         .onChange(of: scenePhase) { phase in if phase != .active { store.flushProgress() } }
         .onChange(of: settings.fontSize) { _ in repaginate() }
         .onChange(of: settings.lineSpacing) { _ in repaginate() }
+        .onChange(of: settings.paragraphSpacing) { _ in repaginate() }
+        .onChange(of: settings.leftMargin) { _ in repaginate() }
+        .onChange(of: settings.rightMargin) { _ in repaginate() }
+        .onChange(of: settings.topMargin) { _ in repaginate() }
+        .onChange(of: settings.bottomMargin) { _ in repaginate() }
         .onChange(of: settings.pageMode) { _ in repaginate() }
         .onChange(of: screenSize) { _ in repaginate() }
         .onDisappear {
@@ -513,7 +534,7 @@ struct ReaderView: View {
     private func repaginate(keepOffset: Int? = nil) {
         guard settings.pageMode == 1, screenSize.width > 0 else { return }
         if let volume = currentVolume {
-            pages = [BookPage(blocks: [.paragraph(text: volume.title, commentCount: 0, commentURL: nil)], startOffset: 0)]
+            pages = [BookPage(blocks: [], startOffset: 0)]
             pageRevision += 1
             pageIndex = 0
             pendingLanding = nil
@@ -527,7 +548,14 @@ struct ReaderView: View {
             safeInsets: UIEdgeInsets(top: pageInsets.top, left: pageInsets.leading,
                                      bottom: pageInsets.bottom, right: pageInsets.trailing),
             fontSize: CGFloat(settings.fontSize),
-            lineSpacing: CGFloat(settings.lineSpacing))
+            lineSpacing: CGFloat(settings.lineSpacing),
+            paragraphSpacing: CGFloat(settings.paragraphSpacing),
+            leftInset: CGFloat(settings.leftMargin),
+            rightInset: CGFloat(settings.rightMargin),
+            topInset: CGFloat(settings.topMargin),
+            bottomInset: CGFloat(settings.bottomMargin),
+            headerHeight: currentVolume == nil ? CGFloat(max(settings.fontSize + 2, 20) + settings.paragraphSpacing) : 0,
+            blockSpacing: CGFloat(settings.paragraphSpacing))
         pages = ReaderPaginator.paginate(source, configuration: configuration)
         pageRevision += 1
         pageIndex = Paginator.pageIndex(containing: offset, in: pages)
@@ -563,11 +591,16 @@ struct ReaderView: View {
     private var renderedPages: [AnyView] {
         pages.enumerated().map { i, page in
             AnyView(PageContentView(page: page, fontSize: settings.fontSize,
-                lineSpacing: settings.lineSpacing, fg: theme.fg, bg: theme.bg,
+                lineSpacing: settings.lineSpacing,
+                paragraphSpacing: settings.paragraphSpacing,
+                leftMargin: settings.leftMargin, rightMargin: settings.rightMargin,
+                topMargin: settings.topMargin, bottomMargin: settings.bottomMargin,
+                fg: theme.fg, bg: theme.bg,
                 title: chapters.indices.contains(index) ? chapters[index].title : "",
                 pageNumber: i + 1, pageCount: pages.count,
                 onTapComment: { commentTapped($0) }, safeInsets: pageInsets,
-                volumeTitle: currentVolume?.title).ignoresSafeArea())
+                volumeTitle: currentVolume?.title,
+                showsChapterTitle: currentVolume == nil).ignoresSafeArea())
         }
     }
 
@@ -642,6 +675,7 @@ struct ReaderView: View {
             InlineCommentParagraph(text: t, count: count,
                                     fontSize: settings.fontSize,
                                     lineSpacing: settings.lineSpacing,
+                                    paragraphSpacing: settings.paragraphSpacing,
                                     color: UIColor(theme.fg),
                                     onTextTap: { toggleBars() },
                                     onTap: { commentTapped(url) })
