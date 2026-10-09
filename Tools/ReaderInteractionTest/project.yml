@@ -15,9 +15,12 @@ targets:
     sources:
       - path: Harness.swift
       - path: ChapterHarness.swift
+      - path: VolumeHarness.swift
       - path: ../../Sources/App/CommentViews.swift
       - path: ../../Sources/App/ReaderTextLayout.swift
       - path: ../../Sources/App/PageTurnView.swift
+      - path: ../../Sources/App/VolumeTitleView.swift
+      - path: ../../Sources/Models/Models.swift
       - path: ../../Sources/App/InteractivePageTurnView.swift
       - path: ../../Sources/App/ReaderScrollBoundaryObserver.swift
       - path: ../../Sources/Engine/Paginator.swift

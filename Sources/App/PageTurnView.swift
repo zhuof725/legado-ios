@@ -28,11 +28,16 @@ struct PageContentView: View {
     let pageCount: Int
     let onTapComment: (String?) -> Void
     var safeInsets = EdgeInsets()
+    var volumeTitle: String? = nil
 
     var body: some View {
         ZStack(alignment: .top) {
             bg.ignoresSafeArea()
             VStack(alignment: .leading, spacing: 2) {
+                if let volumeTitle {
+                    Spacer(minLength: 0)
+                    VolumeTitleView(title: volumeTitle, foreground: fg)
+                } else {
                 ForEach(Array(page.blocks.enumerated()), id: \.offset) { blockIndex, block in
                     switch block {
                     case .paragraph(let t, let count, let url):
@@ -69,6 +74,7 @@ struct PageContentView: View {
                     case .inlineBubble:
                         EmptyView()
                     }
+                }
                 }
                 Spacer(minLength: 0)
                 HStack {

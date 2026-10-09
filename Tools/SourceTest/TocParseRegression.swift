@@ -47,6 +47,14 @@ enum TocParseRegression {
         let dup = [ch("", "卷一", vol: true), ch("a", "A"), ch("b", "B"), ch("a", "A重复"), ch("", "卷二", vol: true), ch("c", "C")]
         let d = WebBook.dedupeChapters(dup)
         check(d.map(\.title) == ["卷一", "A", "B", "卷二", "C"], "目录：按 url 去重保留首次出现，空 URL 卷标题不去重")
+        let shared = [ch("a", "卷一", vol: true), ch("a", "第一章"), ch("a", "重复章"), ch("a", "卷二", vol: true)]
+        check(WebBook.dedupeChapters(shared).map(\.title) == ["卷一", "第一章", "卷二"],
+              "目录：卷标题和章节共用链接时两者均保留")
+        let volumeHTML = "<ul><li data-title='卷名' data-volume='卷名'></li><li data-title='章节' data-url='/1' data-volume='0'></li></ul>"
+        let volumeRule = TocRule(chapterList: "li", chapterName: "data-title", chapterUrl: "data-url", isVolume: "data-volume")
+        let volumes = WebBook.parseChapterNodes(AnalyzeRule(content: volumeHTML, baseUrl: base).getElements("li"),
+            rule: volumeRule, ar: AnalyzeRule(content: volumeHTML, baseUrl: base), baseUrl: base)
+        check(volumes.contains { $0.title == "卷名" && $0.isVolume }, "目录：书源卷标记为文本时仍保留无链接卷名")
     }
 }
 

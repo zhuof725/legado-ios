@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main, fix/source-compat-runtime]
-    paths: ['Sources/App/CommentViews.swift', 'Sources/App/ReaderTextLayout.swift', 'Sources/App/*PageTurnView.swift', 'Sources/App/ReaderScrollBoundaryObserver.swift', 'Sources/Engine/ChapterNavigation.swift', 'Tools/ReaderInteractionTest/**', '.github/workflows/reader-interaction.yml']
+    paths: ['Sources/App/CommentViews.swift', 'Sources/App/ReaderTextLayout.swift', 'Sources/App/*PageTurnView.swift', 'Sources/App/ReaderScrollBoundaryObserver.swift', 'Sources/App/VolumeTitleView.swift', 'Sources/Engine/ChapterNavigation.swift', 'Tools/ReaderInteractionTest/**', '.github/workflows/reader-interaction.yml']
 jobs:
   test:
     runs-on: macos-15

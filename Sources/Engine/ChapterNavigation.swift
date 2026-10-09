@@ -1,7 +1,32 @@
 import Foundation
 
-/// 查找真实章节，不把越界的下一章请求夹回本章，也不打开分卷标题。
+/// 阅读保留分卷；仅网络抓取跳过无需下载的卷标题。越界请求不会夹回本章。
 enum ChapterNavigation {
+    static func displayIndex(from start: Int, direction: Int, chapters: [BookChapter]) -> Int? {
+        readableIndex(from: start, direction: direction, count: chapters.count) {
+            chapters[$0].isVolume || !chapters[$0].url.isEmpty
+        }
+    }
+
+    static func contentIndex(from start: Int, direction: Int, chapters: [BookChapter]) -> Int? {
+        readableIndex(from: start, direction: direction, count: chapters.count) {
+            !chapters[$0].isVolume && !chapters[$0].url.isEmpty
+        }
+    }
+
+    /// 有界的预读窗口：卷标题不计入正文数量，也不从原目录数组删除。
+    static func prefetchIndices(after index: Int, chapters: [BookChapter], limit: Int = 3) -> [Int] {
+        guard limit > 0, index >= -1, index < chapters.count else { return [] }
+        var result: [Int] = []
+        var next = index + 1
+        while result.count < limit,
+              let found = contentIndex(from: next, direction: 1, chapters: chapters) {
+            result.append(found)
+            next = found + 1
+        }
+        return result
+    }
+
     static func readableIndex(from start: Int, direction: Int, count: Int,
                               isReadable: (Int) -> Bool) -> Int? {
         guard direction != 0, start >= 0, start < count else { return nil }

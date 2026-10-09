@@ -142,6 +142,7 @@ enum RuleRegression {
         ReadingPositionRegression.run(check)
         PaginatorRegression.run(check)
         ChapterNavigationRegression.run(check)
+        try await ChapterContentCacheRegression.run(check)
         try LocalBookRegression.run(check)
         SearchRankingRegression.run(check)
         NextUrlRegression.run(check)

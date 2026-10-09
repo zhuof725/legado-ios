@@ -150,7 +150,7 @@ enum WebBook {
             let urls = splitNextUrls(ar.getString(rule.nextTocUrl), base: url)
             for n in urls where !visited.contains(n) && !queue.contains(n) { queue.append(n) }
         }
-        // Legado 以 url 判等，LinkedHashSet 去重并保留首次出现；空 URL 的卷标题不参与去重。
+        // 正文按 url 判重；分卷保留原位置与标题，不能因复用章链接被去重删除。
         list = dedupeChapters(list)
         if reverse { list.reverse() }
         for i in list.indices { list[i].index = i }
@@ -176,7 +176,7 @@ enum WebBook {
             let title = ar.getString(rule.chapterName, from: item)
             if title.isEmpty { continue }
             let vol = ar.getString(rule.isVolume, from: item)
-            let isVol = vol == "true" || vol == "1"
+            let isVol = isTruthy(vol)
             var cu = ar.getString(rule.chapterUrl, from: item)
             if cu.isEmpty {
                 if !isVol { continue } // 普通章节必须有链接；卷标题可以没有
@@ -199,10 +199,10 @@ enum WebBook {
         return !(t.isEmpty || t == "false" || t == "0" || t == "null" || t == "undefined")
     }
 
-    /// Legado 以章节 url 为键，用 LinkedHashSet 保留首次出现；空 URL 的卷标题不参与去重。
+    /// 正文章节按 url 去重；分卷标题按原位置保留，即使它与正文共享链接。
     static func dedupeChapters(_ list: [BookChapter]) -> [BookChapter] {
         var seen = Set<String>()
-        return list.filter { $0.url.isEmpty || seen.insert($0.url).inserted }
+        return list.filter { $0.isVolume || $0.url.isEmpty || seen.insert($0.url).inserted }
     }
 
     // MARK: Content

@@ -159,6 +159,7 @@ struct ReaderView: View {
     @State private var pendingEdge: Int?
     @State private var contentRequestID: UUID?
     @State private var chapterTask: Task<Void, Never>?
+    @State private var prefetchTask: Task<Void, Never>?
     @State private var pendingLanding: ChapterLanding?
     @State private var retryTarget: Int?
     @State private var retryLanding: ChapterLanding = .start
@@ -203,14 +204,21 @@ struct ReaderView: View {
                                 .background(GeometryReader { g in
                                     Color.clear.preference(key: ScrollOffsetKey.self, value: -g.frame(in: .named("reader")).minY)
                                 })
-                            if !chapters.isEmpty, index < chapters.count {
-                                Text(chapters[index].title).font(.title3.bold())
+                            if let volume = currentVolume {
+                                VolumeTitleView(title: volume.title, foreground: theme.fg)
+                                    .frame(minHeight: max(viewportHeight * 0.7, 240))
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { toggleBars() }
+                            } else {
+                                if !chapters.isEmpty, index < chapters.count {
+                                    Text(chapters[index].title).font(.title3.bold())
+                                }
+                                ForEach(Array(readingBlocks.enumerated()), id: \.offset) { _, block in
+                                    blockView(block)
+                                }
                             }
                             if loading { ProgressView().frame(maxWidth: .infinity) }
                             if let e = error { Text(e).foregroundStyle(.red) }
-                            ForEach(Array(readingBlocks.enumerated()), id: \.offset) { _, block in
-                                blockView(block)
-                            }
                             if !chapters.isEmpty {
                                 VStack(spacing: 8) {
                                     HStack {
@@ -331,10 +339,11 @@ struct ReaderView: View {
                     List(chapters) { c in
                         Group {
                             if c.isVolume {
-                                Text(c.title)
-                                    .font(.headline)
-                                    .foregroundStyle(.secondary)
-                                    .listRowBackground(Color.clear)
+                                Button { showToc = false; go(c.index) } label: {
+                                    Text(c.title).font(.headline)
+                                        .foregroundStyle(c.index == index ? Color.accentColor : Color.secondary)
+                                }
+                                .listRowBackground(Color.clear)
                             } else {
                                 Button {
                                     showToc = false; go(c.index)
@@ -415,6 +424,8 @@ struct ReaderView: View {
             contentRequestID = nil
             chapterTask?.cancel()
             chapterTask = nil
+            prefetchTask?.cancel()
+            prefetchTask = nil
             pendingEdge = nil
             loading = false
             restorePermille = nil
@@ -501,6 +512,13 @@ struct ReaderView: View {
     /// 重新分页：字号、行距、屏幕尺寸或内容变化时调用，并回到同一个字符位置。
     private func repaginate(keepOffset: Int? = nil) {
         guard settings.pageMode == 1, screenSize.width > 0 else { return }
+        if let volume = currentVolume {
+            pages = [BookPage(blocks: [.paragraph(text: volume.title, commentCount: 0, commentURL: nil)], startOffset: 0)]
+            pageRevision += 1
+            pageIndex = 0
+            pendingLanding = nil
+            return
+        }
         let source = readingBlocks
         guard !source.isEmpty else { pages = []; return }
         let offset = keepOffset ?? (pages.indices.contains(pageIndex) ? pages[pageIndex].startOffset : 0)
@@ -525,6 +543,11 @@ struct ReaderView: View {
         }
     }
 
+    private var currentVolume: BookChapter? {
+        guard chapters.indices.contains(index), chapters[index].isVolume else { return nil }
+        return chapters[index]
+    }
+
     private var readingBlocks: [ContentBlock] {
         blocks.isEmpty ? Paginator.blocks(fromPlain: text) : blocks
     }
@@ -543,7 +566,8 @@ struct ReaderView: View {
                 lineSpacing: settings.lineSpacing, fg: theme.fg, bg: theme.bg,
                 title: chapters.indices.contains(index) ? chapters[index].title : "",
                 pageNumber: i + 1, pageCount: pages.count,
-                onTapComment: { commentTapped($0) }, safeInsets: pageInsets).ignoresSafeArea())
+                onTapComment: { commentTapped($0) }, safeInsets: pageInsets,
+                volumeTitle: currentVolume?.title).ignoresSafeArea())
         }
     }
 
@@ -654,9 +678,7 @@ struct ReaderView: View {
     }
 
     private func readableIndex(from value: Int, direction: Int) -> Int? {
-        ChapterNavigation.readableIndex(from: value, direction: direction, count: chapters.count) {
-            !chapters[$0].isVolume && !chapters[$0].url.isEmpty
-        }
+        ChapterNavigation.displayIndex(from: value, direction: direction, chapters: chapters)
     }
 
     private func go(_ i: Int) {
@@ -667,6 +689,9 @@ struct ReaderView: View {
     private func loadChapter(_ target: Int, landing: ChapterLanding) {
         guard !loading, chapters.indices.contains(target) else { return }
         chapterTask?.cancel()
+        // 停止旧预读队列的后续任务；在途的目标章由共享缓存接管，不会重复抓取。
+        prefetchTask?.cancel()
+        prefetchTask = nil
         let requestID = UUID()
         contentRequestID = requestID
         retryTarget = nil
@@ -689,7 +714,10 @@ struct ReaderView: View {
         let chapter = chapters[target]
         do {
             let raw: String
-            if store.isLocal(book) {
+            if chapter.isVolume {
+                // 卷标题是独立的本地阅读项，不当成空章节，也不请求卷链接。
+                raw = chapter.title
+            } else if store.isLocal(book) {
                 guard let local = store.localContent(book, index: target) else {
                     throw NSError(domain: "Reader", code: 1,
                                   userInfo: [NSLocalizedDescriptionKey: "本地章节文件不存在"])
@@ -700,17 +728,10 @@ struct ReaderView: View {
                     throw NSError(domain: "Reader", code: 2,
                                   userInfo: [NSLocalizedDescriptionKey: "找不到书源"])
                 }
-                if let cached = store.cachedContent(chapter), !cached.isEmpty {
-                    raw = cached
-                } else {
-                    let next = readableIndex(from: target + 1, direction: 1).map { chapters[$0].url }
-                    let result = try await WebBook.contentBlocks(source: source, chapter: chapter,
-                                                               nextChapterUrl: next, book: book)
-                    try Task.checkCancellation()
-                    guard contentRequestID == requestID else { return }
-                    store.saveContent(chapter, result.raw)
-                    raw = result.raw.isEmpty ? "（正文为空，书源可能不兼容）" : result.raw
-                }
+                let next = ChapterNavigation.contentIndex(from: target + 1, direction: 1, chapters: chapters)
+                    .map { chapters[$0].url }
+                raw = try await ChapterContentLoader.content(source: source, book: book, chapter: chapter,
+                                                             nextChapterURL: next)
             }
             try Task.checkCancellation()
             guard contentRequestID == requestID else { return }
@@ -747,7 +768,8 @@ struct ReaderView: View {
     private func show(raw: String, landing: ChapterLanding) {
         let parsed = ContentBlocks.parse(raw)
         let hasRich = parsed.contains { if case .paragraph(_, let c, _) = $0 { return c > 0 }; if case .paragraph = $0 { return false }; return true }
-        if hasRich { blocks = parsed; text = "" }
+        if currentVolume != nil { blocks = []; text = raw }
+        else if hasRich { blocks = parsed; text = "" }
         else { blocks = []; text = WebBook.cleanText(raw) }
         pages = []
         pageIndex = 0
@@ -768,13 +790,27 @@ struct ReaderView: View {
         }
     }
 
-    private func prefetch(_ s: BookSource) {
-        guard let i = nextChapter else { return }
-        let c = chapters[i]
-        if store.cachedContent(c) != nil { return }
-        let next = readableIndex(from: i + 1, direction: 1).map { chapters[$0].url }
-        Task {
-            if let r = try? await WebBook.contentBlocks(source: s, chapter: c, nextChapterUrl: next, book: book) { store.saveContent(c, r.raw) }
+    private func prefetch(_ source: BookSource) {
+        prefetchTask?.cancel()
+        guard !store.isLocal(book) else { return }
+        let snapshot = chapters
+        let queue = ChapterNavigation.prefetchIndices(after: index, chapters: snapshot, limit: 3)
+        guard !queue.isEmpty else { prefetchTask = nil; return }
+        let readingBook = book
+        // 阅读时在 MainActor 外依次预读后续 3 章，避免同时轰击书源或阻塞正文手势。
+        prefetchTask = Task.detached(priority: .utility) {
+            for i in queue {
+                guard !Task.isCancelled else { return }
+                let next = ChapterNavigation.contentIndex(from: i + 1, direction: 1, chapters: snapshot)
+                    .map { snapshot[$0].url }
+                do {
+                    _ = try await ChapterContentLoader.content(source: source, book: readingBook,
+                        chapter: snapshot[i], nextChapterURL: next, priority: .utility)
+                } catch {
+                    // 不把预读失败展示成当前章错误，也不越过登录/网络失败继续请求后续章节。
+                    return
+                }
+            }
         }
     }
 }
