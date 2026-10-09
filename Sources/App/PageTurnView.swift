@@ -39,16 +39,16 @@ struct PageContentView: View {
     var body: some View {
         ZStack(alignment: .top) {
             bg.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: CGFloat(paragraphSpacing)) {
+            VStack(alignment: .leading, spacing: 0) {
                 if let volumeTitle {
                     Spacer(minLength: 0)
                     VolumeTitleView(title: volumeTitle, foreground: fg)
+                    Spacer(minLength: 8)
                 } else {
-                if showsChapterTitle && pageNumber == 1 {
-                    Text(title)
-                        .font(.system(size: max(fontSize + 2, 20), weight: .semibold))
-                        .lineLimit(2)
-                        .padding(.bottom, CGFloat(paragraphSpacing))
+                VStack(alignment: .leading, spacing: CGFloat(paragraphSpacing)) {
+                if showsChapterTitle && pageNumber == 1 && !title.isEmpty {
+                    ChapterTitleView(title: title, fontSize: CGFloat(fontSize), color: UIColor(fg))
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 ForEach(Array(page.blocks.enumerated()), id: \.offset) { blockIndex, block in
                     switch block {
@@ -57,7 +57,6 @@ struct PageContentView: View {
                         InlineCommentParagraph(text: t, count: count,
                                                 fontSize: fontSize,
                                                 lineSpacing: lineSpacing,
-                                                paragraphSpacing: paragraphSpacing,
                                                 color: UIColor(fg),
                                                 continuation: continuation,
                                                 onTap: { onTapComment(url) })
@@ -89,7 +88,8 @@ struct PageContentView: View {
                     }
                 }
                 }
-                Spacer(minLength: 0)
+                }
+                Spacer(minLength: 8)
                 HStack {
                     Text(title).lineLimit(1)
                     Spacer()
@@ -97,10 +97,11 @@ struct PageContentView: View {
                 }
                 .font(.system(size: 11))
                 .foregroundStyle(fg.opacity(0.45))
+                .frame(height: 16)
             }
             .foregroundStyle(fg)
-            .padding(.leading, leftMargin)
-            .padding(.trailing, rightMargin)
+            .padding(.leading, CGFloat(leftMargin))
+            .padding(.trailing, CGFloat(rightMargin))
             .padding(.top, safeInsets.top + CGFloat(topMargin))
             .padding(.bottom, safeInsets.bottom + CGFloat(bottomMargin))
         }

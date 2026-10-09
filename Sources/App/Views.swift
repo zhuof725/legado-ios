@@ -211,9 +211,10 @@ struct ReaderView: View {
                                     .onTapGesture { toggleBars() }
                             } else {
                                 if !chapters.isEmpty, index < chapters.count {
-                                    Text(chapters[index].title)
-                                        .font(.system(size: max(settings.fontSize + 2, 20), weight: .semibold))
-                                        .padding(.bottom, CGFloat(settings.paragraphSpacing))
+                                    ChapterTitleView(title: chapters[index].title,
+                                                     fontSize: CGFloat(settings.fontSize), color: UIColor(theme.fg))
+                                        .contentShape(Rectangle())
+                                        .onTapGesture { toggleBars() }
                                 }
                                 ForEach(Array(readingBlocks.enumerated()), id: \.offset) { _, block in
                                     blockView(block)
@@ -384,19 +385,7 @@ struct ReaderView: View {
                             .pickerStyle(.segmented)
                         }
                     }
-                    Section("字号 \(Int(settings.fontSize))") {
-                        HStack {
-                            Button { settings.fontSize = max(12, settings.fontSize - 1) } label: { Image(systemName: "minus.circle") }
-                            Slider(value: $settings.fontSize, in: 12...36, step: 1)
-                            Button { settings.fontSize = min(36, settings.fontSize + 1) } label: { Image(systemName: "plus.circle") }
-                        }
-                    }
-                    Section("行距 \(Int(settings.lineSpacing))") { Slider(value: $settings.lineSpacing, in: 0...30, step: 1) }
-                    Section("段间距 \(Int(settings.paragraphSpacing))") { Slider(value: $settings.paragraphSpacing, in: 0...30, step: 1) }
-                    Section("左边距 \(Int(settings.leftMargin))") { Slider(value: $settings.leftMargin, in: 0...60, step: 1) }
-                    Section("右边距 \(Int(settings.rightMargin))") { Slider(value: $settings.rightMargin, in: 0...60, step: 1) }
-                    Section("上边距 \(Int(settings.topMargin))") { Slider(value: $settings.topMargin, in: 0...80, step: 1) }
-                    Section("下边距 \(Int(settings.bottomMargin))") { Slider(value: $settings.bottomMargin, in: 0...80, step: 1) }
+                    ReaderTypographyControls(settings: settings)
                     Section("背景") {
                         Picker("主题", selection: $settings.theme) {
                             ForEach(0..<ReadSettings.themes.count, id: \.self) { Text(ReadSettings.themes[$0].name).tag($0) }
@@ -407,7 +396,8 @@ struct ReaderView: View {
                 .navigationTitle("阅读设置")
                 .navigationBarTitleDisplayMode(.inline)
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .overlay {
             if loading && (!text.isEmpty || !blocks.isEmpty || !pages.isEmpty) {
@@ -554,8 +544,7 @@ struct ReaderView: View {
             rightInset: CGFloat(settings.rightMargin),
             topInset: CGFloat(settings.topMargin),
             bottomInset: CGFloat(settings.bottomMargin),
-            headerHeight: currentVolume == nil ? CGFloat(max(settings.fontSize + 2, 20) + settings.paragraphSpacing) : 0,
-            blockSpacing: CGFloat(settings.paragraphSpacing))
+            chapterTitle: chapters.indices.contains(index) ? chapters[index].title : "")
         pages = ReaderPaginator.paginate(source, configuration: configuration)
         pageRevision += 1
         pageIndex = Paginator.pageIndex(containing: offset, in: pages)
@@ -674,7 +663,6 @@ struct ReaderView: View {
             InlineCommentParagraph(text: t, count: count,
                                     fontSize: settings.fontSize,
                                     lineSpacing: settings.lineSpacing,
-                                    paragraphSpacing: settings.paragraphSpacing,
                                     color: UIColor(theme.fg),
                                     onTextTap: { toggleBars() },
                                     onTap: { commentTapped(url) })

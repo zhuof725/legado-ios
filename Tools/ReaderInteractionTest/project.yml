@@ -16,10 +16,14 @@ targets:
       - path: Harness.swift
       - path: ChapterHarness.swift
       - path: VolumeHarness.swift
+      - path: TypographyHarness.swift
       - path: ../../Sources/App/CommentViews.swift
       - path: ../../Sources/App/ReaderTextLayout.swift
       - path: ../../Sources/App/PageTurnView.swift
       - path: ../../Sources/App/VolumeTitleView.swift
+      - path: ../../Sources/App/ChapterTitleView.swift
+      - path: ../../Sources/App/ReaderTypographyControls.swift
+      - path: ../../Sources/Store/ReadSettings.swift
       - path: ../../Sources/Models/Models.swift
       - path: ../../Sources/App/InteractivePageTurnView.swift
       - path: ../../Sources/App/ReaderScrollBoundaryObserver.swift
