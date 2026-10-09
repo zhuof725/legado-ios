@@ -3,7 +3,7 @@ import WebKit
 
 extension URL: Identifiable { public var id: String { absoluteString } }
 
-/// 段评/章评固定为屏高 60%；上划滚动网页，下拉仍可关闭。
+/// 段评/章评：默认半屏，上划可展开到全屏；内容区域优先滚动网页。
 struct CommentSheet: View {
     let url: URL
     var heightFraction: CGFloat = 0.6
@@ -12,9 +12,9 @@ struct CommentSheet: View {
         // 不放额外按钮：下拉或点半屏外侧即可关闭。
         CommentWebView(url: url)
             .ignoresSafeArea(edges: .bottom)
-            // 只有一个半屏 detent：网页上划只滚动评论内容，不把弹窗展开到全屏。
-            .presentationDetents([.fraction(heightFraction)])
-            .presentationDragIndicator(.hidden)
+            // 默认半屏；上划可展开到全屏，网页内容仍优先接收滚动。
+            .presentationDetents([.fraction(heightFraction), .large])
+            .presentationDragIndicator(.visible)
             .modifier(SheetCorner(radius: 20))
     }
 }
@@ -143,16 +143,19 @@ struct InlineCommentParagraph: UIViewRepresentable {
     let lineSpacing: CGFloat
     let color: UIColor
     let continuation: Bool
+    let onTextTap: (() -> Void)?
     let onTap: () -> Void
 
     init(text: String, count: Int, fontSize: CGFloat, lineSpacing: CGFloat,
-         color: UIColor, continuation: Bool = false, onTap: @escaping () -> Void) {
+         color: UIColor, continuation: Bool = false, onTextTap: (() -> Void)? = nil,
+         onTap: @escaping () -> Void) {
         self.text = text
         self.count = count
         self.fontSize = fontSize
         self.lineSpacing = lineSpacing
         self.color = color
         self.continuation = continuation
+        self.onTextTap = onTextTap
         self.onTap = onTap
     }
 
@@ -160,11 +163,14 @@ struct InlineCommentParagraph: UIViewRepresentable {
         let view = ReaderTextLayout.makeTextView()
         ReaderTextLayout.configure(view)
         view.onBubbleTap = onTap
+        view.onTextTap = onTextTap
+        view.installTapHandling()
         return view
     }
 
     func updateUIView(_ view: CommentTextView, context: Context) {
         view.onBubbleTap = onTap
+        view.onTextTap = onTextTap
         view.render(text: text, count: count, fontSize: fontSize, lineSpacing: lineSpacing,
                     color: color, continuation: continuation)
     }
@@ -176,10 +182,50 @@ struct InlineCommentParagraph: UIViewRepresentable {
     }
 }
 
-final class CommentTextView: UITextView {
+final class CommentTextView: UITextView, UIGestureRecognizerDelegate {
     var onBubbleTap: (() -> Void)?
+    var onTextTap: (() -> Void)?
     private var bubbleIndex: Int?
     private var lastRenderKey: String?
+    private var paragraphTap: UITapGestureRecognizer?
+
+    func installTapHandling() {
+        guard paragraphTap == nil else { return }
+        let tap = UITapGestureRecognizer(target: self, action: #selector(paragraphTapped(_:)))
+        tap.delegate = self
+        tap.cancelsTouchesInView = true
+        tap.delaysTouchesBegan = false
+        tap.delaysTouchesEnded = false
+        addGestureRecognizer(tap)
+        paragraphTap = tap
+    }
+
+    /// 使用附件实际字形区域，不能用“最近字符”判断（会把行尾空白误当气泡）。
+    var bubbleRect: CGRect? {
+        guard let bubbleIndex, bubbleIndex < textStorage.length else { return nil }
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: bubbleIndex, length: 1),
+                                             actualCharacterRange: nil)
+        guard glyphs.length > 0 else { return nil }
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+        guard rect.width > 0, rect.height > 0 else { return nil }
+        return rect.offsetBy(dx: textContainerInset.left, dy: textContainerInset.top)
+    }
+
+    func isBubble(at point: CGPoint) -> Bool {
+        bubbleRect?.contains(point) == true
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        // 没有正文回调时，正文点击交还给翻页容器；气泡始终由本组件处理。
+        onTextTap != nil || isBubble(at: touch.location(in: self))
+    }
+
+    @objc private func paragraphTapped(_ tap: UITapGestureRecognizer) {
+        guard tap.state == .ended else { return }
+        if isBubble(at: tap.location(in: self)) { onBubbleTap?() }
+        else { onTextTap?() }
+    }
 
     func render(text: String, count: Int, fontSize: CGFloat, lineSpacing: CGFloat,
                 color: UIColor, continuation: Bool = false) {
@@ -207,16 +253,4 @@ final class CommentTextView: UITextView {
                       height: ceil(sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height))
     }
 
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let touch = touches.first, let bubbleIndex {
-            let point = touch.location(in: self)
-            let character = layoutManager.characterIndex(for: point, in: textContainer,
-                                                          fractionOfDistanceBetweenInsertionPoints: nil)
-            if character == bubbleIndex {
-                onBubbleTap?()
-                return
-            }
-        }
-        super.touchesEnded(touches, with: event)
-    }
 }

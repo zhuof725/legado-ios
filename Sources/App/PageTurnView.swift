@@ -206,7 +206,9 @@ struct PageTurnView: UIViewControllerRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
             var view = touch.view
             while let current = view {
-                if current is CommentTextView { return false }
+                if let paragraph = current as? CommentTextView {
+                    return !paragraph.isBubble(at: touch.location(in: paragraph))
+                }
                 view = current.superview
             }
             return true

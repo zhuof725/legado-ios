@@ -1,0 +1,40 @@
+name: Reader interaction test
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['Sources/App/CommentViews.swift', 'Tools/ReaderInteractionTest/**']
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate focused test project
+        run: cd Tools/ReaderInteractionTest && xcodegen generate
+      - name: Pick available iPhone simulator
+        run: |
+          xcrun simctl list devices available -j > /tmp/devices.json
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json
+          devices = json.load(open('/tmp/devices.json'))['devices']
+          phones = [d for group in devices.values() for d in group if d['name'].startswith('iPhone')]
+          assert phones
+          print('SIMULATOR_ID=' + phones[0]['udid'])
+          PY
+      - name: Test real taps and scroll gestures
+        run: |
+          set -o pipefail
+          xcodebuild -project Tools/ReaderInteractionTest/ReaderInteraction.xcodeproj \
+            -scheme ReaderHarness -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -resultBundlePath reader-interaction.xcresult CODE_SIGNING_ALLOWED=NO test \
+            2>&1 | tee reader-interaction.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reader-interaction-results
+          path: |
+            reader-interaction.log
+            reader-interaction.xcresult

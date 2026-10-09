@@ -132,21 +132,6 @@ struct BookDetailView: View {
 
 // MARK: - Reader
 
-private final class ReaderTapGate: ObservableObject {
-    private var suppressUntil: TimeInterval = 0
-
-    func suppressForShortTap() {
-        suppressUntil = Date().timeIntervalSince1970 + 0.18
-    }
-
-    func consumeSuppression() -> Bool {
-        let now = Date().timeIntervalSince1970
-        guard now < suppressUntil else { return false }
-        suppressUntil = 0
-        return true
-    }
-}
-
 struct ReaderView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var settings: ReadSettings
@@ -175,14 +160,12 @@ struct ReaderView: View {
     @State private var showToc = false
     @State private var showSettings = false
     @State private var showBars = false
-    @StateObject private var tapGate = ReaderTapGate()
 
     private func toggleBars() {
         showBars.toggle()
     }
 
     private func commentTapped(_ target: String?) {
-        tapGate.suppressForShortTap()
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         openComment(target)
     }
@@ -262,8 +245,8 @@ struct ReaderView: View {
                     }
                     .onChange(of: loading) { _ in applyRestoreIfReady(proxy: proxy) }
                 }
-                .onTapGesture {
-                    if !tapGate.consumeSuppression() { toggleBars() }
+                .background {
+                    theme.bg.contentShape(Rectangle()).onTapGesture { toggleBars() }
                 }
             }
         }
@@ -556,6 +539,7 @@ struct ReaderView: View {
                                     fontSize: settings.fontSize,
                                     lineSpacing: settings.lineSpacing,
                                     color: UIColor(theme.fg),
+                                    onTextTap: { toggleBars() },
                                     onTap: { commentTapped(url) })
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .inlineBubble:

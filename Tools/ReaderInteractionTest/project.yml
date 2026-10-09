@@ -1,0 +1,42 @@
+name: ReaderInteraction
+options:
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGNING_ALLOWED: NO
+    GENERATE_INFOPLIST_FILE: YES
+    TARGETED_DEVICE_FAMILY: "1"
+targets:
+  ReaderHarness:
+    type: application
+    platform: iOS
+    sources:
+      - path: Harness.swift
+      - path: ../../Sources/App/CommentViews.swift
+      - path: ../../Sources/App/ReaderTextLayout.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.legado.readerharness
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+  ReaderInteractionTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: ReaderHarness
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.legado.readerinteractiontests
+        TEST_TARGET_NAME: ReaderHarness
+schemes:
+  ReaderHarness:
+    build:
+      targets:
+        ReaderHarness: all
+        ReaderInteractionTests: [test]
+    test:
+      targets:
+        - ReaderInteractionTests
