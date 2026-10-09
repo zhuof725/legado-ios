@@ -14,25 +14,30 @@ struct ReaderObservation {
     let visibleText: String
 
     init(_ app: XCUIApplication) {
-        screen = app.frame
-        let running = app.state == .runningForeground
+        // 一次原子 AX 快照，不能把 allElementsBoundByIndex 留到翻页/标题变化后再逐项查询。
+        // 那些 live query 的索引会失效，导致测试自身报“index 5 不存在”。
+        func descendants(_ node: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
+            var result: [XCUIElementSnapshot] = [node]
+            for child in node.children { result.append(contentsOf: descendants(child)) }
+            return result
+        }
+        let snapshot = try? app.snapshot()
+        let nodes: [XCUIElementSnapshot] = snapshot.map(descendants) ?? []
+        screen = snapshot?.frame ?? .zero
         func label(_ id: String) -> String {
-            guard running, app.staticTexts[id].exists else { return "missing" }
-            return app.staticTexts[id].label
+            nodes.first(where: { $0.identifier == id })?.label ?? "missing"
         }
         func footers(_ id: String) -> [Footer] {
-            guard running else { return [] }
-            return app.staticTexts.matching(identifier: id).allElementsBoundByIndex.map {
-                Footer(text: $0.label, frame: $0.frame)
-            }
+            nodes.filter { $0.identifier == id }.map { Footer(text: $0.label, frame: $0.frame) }
         }
         state = label("chapter-state")
         metrics = label("animation-metrics")
         titles = footers("reader-footer-title")
         numbers = footers("reader-footer-page")
-        let texts = running ? app.staticTexts.allElementsBoundByIndex + app.textViews.allElementsBoundByIndex : []
-        visibleText = texts.filter {
-            $0.identifier != "animation-metrics" && !$0.frame.isEmpty && $0.frame.intersects(app.frame)
+        let bounds = screen
+        visibleText = nodes.filter {
+            ($0.elementType == .staticText || $0.elementType == .textView)
+                && $0.identifier != "animation-metrics" && !$0.frame.isEmpty && $0.frame.intersects(bounds)
         }.prefix(40).map {
             "\($0.identifier): \($0.label) \(($0.value as? String) ?? "") @\($0.frame)"
         }.joined(separator: "\n")
