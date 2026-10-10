@@ -326,6 +326,20 @@ private enum TypographyInspection {
                     }
                     overflow = max(overflow, y + grid.lineHeight - grid.baseline - bottom)
                 }
+                if index == pages.count - 1 {
+                    var expectedY = top
+                    for (blockIndex, view) in views.enumerated() {
+                        let origin = view.convert(CGPoint.zero, to: host.view).y
+                        terminalOK = terminalOK && abs(origin - expectedY) <= 0.75
+                        let rows = lines(view)
+                        for pair in zip(rows, rows.dropFirst()) {
+                            terminalOK = terminalOK && abs(pair.1.baseline - pair.0.baseline - grid.lineHeight - 8) <= 0.5
+                        }
+                        if blockIndex < page.blockHeights.count {
+                            expectedY += CGFloat(page.blockHeights[blockIndex]) + config.paragraphSpacing
+                        } else { terminalOK = false }
+                    }
+                }
                 for view in views {
                     if let rect = view.bubbleRect {
                         if !view.isBubble(at: CGPoint(x: rect.midX, y: rect.midY)) { terminalOK = false }
