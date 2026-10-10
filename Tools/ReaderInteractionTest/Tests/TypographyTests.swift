@@ -16,6 +16,19 @@ final class TypographyTests: XCTestCase {
         func number(_ key: String) throws -> Double {
             try XCTUnwrap(report[key] as? NSNumber, "Missing \(key): \(metrics.label)").doubleValue
         }
+        let detail = XCTAttachment(string: metrics.label)
+        detail.name = "production-glyph-metrics"
+        detail.lifetime = .keepAlways
+        add(detail)
+        XCTAssertLessThanOrEqual(try number("balancedGlyphEdge"), 0.75, metrics.label)
+        XCTAssertLessThanOrEqual(try number("balancedInkGap"), 0.18, metrics.label)
+        XCTAssertGreaterThan(try number("balancedInkChecked"), 40, metrics.label)
+        XCTAssertLessThanOrEqual(try number("balancedRepeatError"), 0.01, metrics.label)
+        XCTAssertLessThanOrEqual(try number("balancedEdge"), 0.75, metrics.label)
+        XCTAssertLessThanOrEqual(try number("balancedSpread"), 0.25, metrics.label)
+        XCTAssertLessThanOrEqual(try number("balancedMaxStep"), 1.2, metrics.label)
+        XCTAssertGreaterThan(try number("balancedRows"), 40, metrics.label)
+        XCTAssertEqual(report["balancedBreaksOK"] as? Bool, true, metrics.label)
         XCTAssertEqual(report["referenceCompact"] as? Bool, true, metrics.label)
         XCTAssertEqual(report["referencePreserved"] as? Bool, true, metrics.label)
         XCTAssertLessThan(try number("referenceOpeningError"), 0.18, metrics.label)

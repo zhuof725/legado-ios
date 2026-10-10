@@ -174,6 +174,7 @@ private enum TypographyInspection {
                     width: expectedWidth, fontSize: 19, lineSpacing: 8)))
                 let manager = view.layoutManager
                 for row in lines(view) {
+                    var hanStep: CGFloat?
                     for glyph in row.glyphs.location..<NSMaxRange(row.glyphs) {
                         if manager.characterIndexForGlyph(at: glyph) >= (text as NSString).length { continue }
                         let x = row.rect.minX + manager.location(forGlyphAt: glyph).x
@@ -184,8 +185,9 @@ private enum TypographyInspection {
                         if glyph > row.glyphs.location, ci > 0,
                            (0x4E00...0x9FFF).contains(Int(ns.character(at: ci))),
                            (0x4E00...0x9FFF).contains(Int(ns.character(at: ci - 1))) {
-                            gridError = max(gridError, abs(x - row.rect.minX
-                                - manager.location(forGlyphAt: glyph - 1).x - grid.cellWidth))
+                            let step = x - row.rect.minX - manager.location(forGlyphAt: glyph - 1).x
+                            gridError = max(gridError, abs(step - (hanStep ?? step)))
+                            hanStep = step
                         }
                         glyphs += 1
                     }
@@ -292,6 +294,76 @@ private enum TypographyInspection {
         return ["inkOK": inkOK, "inkChecks": inkChecks, "inkSamples": inkSamples,
                 "wrappingOK": wrappingOK, "breakChecks": breakChecks,
                 "bubbleGapError": Double(bubbleGapError), "bubbleBaselineError": Double(bubbleBaselineError)]
+    }
+
+    private static func balancedRowsReport() -> [String: Any] {
+        let view = ReaderTextLayout.makeTextView()
+        ReaderTextLayout.configure(view)
+        var samples: [[String: Any]] = []
+        var edge: CGFloat = 0, spread: CGFloat = 0, maxStep: CGFloat = 0
+        var checked = 0, inkChecked = 0
+        var glyphEdge: CGFloat = 0, inkGap: CGFloat = 0, repeatError: CGFloat = 0
+        var breaksOK = true
+        for size in [CGFloat(19), 23, 24, 26] {
+            for width in [CGFloat(333.5), 351, 362, 370] {
+                let text = ReferenceTypography.texts[2]
+                let ns = text as NSString
+                let grid = ReaderTextLayout.metrics(fontSize: size, width: width)
+                _ = layout(view, text: text, count: 99, width: width, size: size, spacing: 8)
+                let manager = view.layoutManager
+                let rows = lines(view)
+                for (ri, row) in rows.enumerated() {
+                    let cr = manager.characterRange(forGlyphRange: row.glyphs, actualGlyphRange: nil)
+                    let part = (view.textStorage.string as NSString).substring(with: cr)
+                    if let first = part.first, let last = part.last {
+                        breaksOK = breaksOK && !"，。！？；：、’”】》」".contains(first)
+                            && !"‘“【《「".contains(last)
+                    }
+                    var steps: [CGFloat] = []
+                    for g in (row.glyphs.location + 1)..<NSMaxRange(row.glyphs) {
+                        let a = manager.characterIndexForGlyph(at: g - 1)
+                        let b = manager.characterIndexForGlyph(at: g)
+                        if b < ns.length, (0x4E00...0x9FFF).contains(Int(ns.character(at: a))),
+                           (0x4E00...0x9FFF).contains(Int(ns.character(at: b))) {
+                            steps.append(manager.location(forGlyphAt: g).x - manager.location(forGlyphAt: g - 1).x)
+                        }
+                    }
+                    if let lo = steps.min(), let hi = steps.max() {
+                        spread = max(spread, hi - lo)
+                        maxStep = max(maxStep, hi / grid.cellWidth)
+                    }
+                    if ri < rows.count - 1 {
+                        edge = max(edge, abs(width - row.used.maxX))
+                        let lastGlyph = NSMaxRange(row.glyphs) - 1
+                        let lastChar = manager.characterIndexForGlyph(at: lastGlyph)
+                        if lastChar < ns.length,
+                           (0x4E00...0x9FFF).contains(Int(ns.character(at: lastChar))) {
+                            // Independent of usedRect: final Han origin plus its actual cell advance.
+                            let right = row.rect.minX + manager.location(forGlyphAt: lastGlyph).x + grid.cellWidth
+                            glyphEdge = max(glyphEdge, abs(width - right))
+                            if let painted = ink(view, character: lastChar) {
+                                inkGap = max(inkGap, abs(width - painted.maxX) / grid.cellWidth)
+                                inkChecked += 1
+                            }
+                        }
+                        checked += 1
+                    }
+                    samples.append(["size": Double(size), "width": Double(width), "text": part,
+                        "right": Double(row.used.maxX), "terminal": ri == rows.count - 1,
+                        "minStep": Double(steps.min() ?? 0), "maxStep": Double(steps.max() ?? 0)])
+                }
+                let before = (0..<manager.numberOfGlyphs).map { manager.location(forGlyphAt: $0) }
+                manager.delegate?.layoutManager?(manager, didCompleteLayoutFor: view.textContainer, atEnd: true)
+                for (glyph, point) in before.enumerated() {
+                    repeatError = max(repeatError, abs(point.x - manager.location(forGlyphAt: glyph).x))
+                }
+            }
+        }
+        return ["balancedGlyphEdge": Double(glyphEdge), "balancedInkGap": Double(inkGap),
+                "balancedInkChecked": inkChecked, "balancedRepeatError": Double(repeatError),
+                "balancedEdge": Double(edge), "balancedSpread": Double(spread),
+                "balancedMaxStep": Double(maxStep), "balancedRows": checked,
+                "balancedBreaksOK": breaksOK, "balancedSamples": samples]
     }
 
     private static func referenceReport() -> [String: Any] {
@@ -459,6 +531,7 @@ private enum TypographyInspection {
                         }
                         for (rowIndex, row) in rows.enumerated() {
                             var previous: CGFloat?
+                            var hanStep: CGFloat?
                             for glyph in row.glyphs.location..<NSMaxRange(row.glyphs) {
                                 let x = row.rect.minX + view.layoutManager.location(forGlyphAt: glyph).x
                                 if text == han {
@@ -476,6 +549,16 @@ private enum TypographyInspection {
                                     } else if "，。、；：！？".contains(mark), ci + 1 < ns.length,
                                               "’”".contains(ns.substring(with: NSRange(location: ci + 1, length: 1))) {
                                         expected -= grid.cellWidth * 0.5
+                                    }
+                                    let next = manager.characterIndexForGlyph(at: glyph)
+                                    let adjacentHan = (0x4E00...0x9FFF).contains(Int(ns.character(at: ci)))
+                                        && (0x4E00...0x9FFF).contains(Int(ns.character(at: next)))
+                                    if text != han && adjacentHan {
+                                        // Mixed rows have one uniform Han step; optical punctuation
+                                        // still has its original measured advance, checked below.
+                                        let step = x - previous
+                                        expected = hanStep ?? step
+                                        hanStep = step
                                     }
                                     stepError = max(stepError, abs(x - previous - expected))
                                 }
@@ -624,6 +707,7 @@ private enum TypographyInspection {
         ]
         report.merge(bottomReport()) { _, new in new }
         report.merge(scrollHostReport()) { _, new in new }
+        report.merge(balancedRowsReport()) { _, new in new }
         report.merge(referenceReport()) { _, new in new }
         report.merge(punctuationReport()) { _, new in new }
         guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),
@@ -654,7 +738,7 @@ private struct ReferenceTypographyPage: View {
             let config = configuration(geometry.size)
             let pages = ReaderPaginator.paginate(ReferenceTypography.blocks, configuration: config)
             if let page = pages.first {
-                PageContentView(page: page, fontSize: 19, lineSpacing: 8,
+                PageContentView(page: page, fontSize: 24, lineSpacing: 8,
                     fg: Color(red: 0.25, green: 0.24, blue: 0.21),
                     bg: Color(red: 0.98, green: 0.96, blue: 0.91), title: "1、归零",
                     pageNumber: 1, pageCount: pages.count, onTapComment: { _ in },
@@ -664,7 +748,7 @@ private struct ReferenceTypographyPage: View {
         }.ignoresSafeArea()
     }
     private func configuration(_ size: CGSize) -> ReaderPaginator.Configuration {
-        var value = ReaderPaginator.Configuration(pageSize: size, fontSize: 19, lineSpacing: 8,
+        var value = ReaderPaginator.Configuration(pageSize: size, fontSize: 24, lineSpacing: 8,
             paragraphSpacing: 8, leftInset: 16, rightInset: 16, topInset: 90, bottomInset: 30)
         value.chapterTitle = "1、归零"
         return value

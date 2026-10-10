@@ -105,8 +105,8 @@ enum ReaderTextLayout {
         style.maximumLineHeight = grid.lineHeight
         // 段间距和标题仍由外层布局计算；不把最后一行/章尾撑满。
         style.paragraphSpacing = 0
-        // justified 会逐行分配余量（首行缩进、避头尾标点时尤其明显），破坏纵向字列。
-        // 宽度均分为整数字格，满行接近两端齐；避头尾和混排留下的空白不强行拉伸。
+        // TextKit 先按整字格及紧凑标点确定合法断行。
+        // 行片段确定后再平衡汉字间余量，标点和段末行保持原来的间隔。
         style.alignment = .left
         style.lineBreakMode = .byWordWrapping
         style.hyphenationFactor = 0
@@ -184,6 +184,8 @@ enum ReaderTextLayout {
                                     range: NSRange(location: index - 1, length: 1))
             }
         }
+        result.addAttribute(.paragraphStyle, value: style,
+                            range: NSRange(location: 0, length: result.length))
         if count > 0 {
             // 保留原有的一个分隔字符；显式固定为四分之一字格，避免系统空格宽度漂移。
             var gapAttributes = attrs
@@ -265,10 +267,62 @@ enum ReaderTextLayout {
     }
 }
 
-/// TextKit 仍负责塑形、换行、避头尾和附件。只统一行片段内的基线，不移动单个字形。
+/// TextKit 负责塑形、合法断行和附件；统一基线后，仅在汉字边界补偿引号压缩产生的行宽余量。
 /// NSLayoutManager.delegate 是弱引用，静态实例确保渲染器/分页器始终使用同一规则。
 private final class ReaderLineMetrics: NSObject, NSLayoutManagerDelegate {
     static let shared = ReaderLineMetrics()
+    private var balancing = Set<ObjectIdentifier>()
+
+    func layoutManager(_ manager: NSLayoutManager, didCompleteLayoutFor container: NSTextContainer?,
+                       atEnd layoutFinishedFlag: Bool) {
+        guard let container, let storage = manager.textStorage else { return }
+        let identity = ObjectIdentifier(manager)
+        guard balancing.insert(identity).inserted else { return }
+        defer { balancing.remove(identity) }
+        let source = storage.string as NSString
+        // No compressed CJK quote means the original integer-column layout is unchanged.
+        guard source.rangeOfCharacter(from: CharacterSet(charactersIn: "‘’“”")).location != NSNotFound else { return }
+        var rows: [(CGRect, CGRect, NSRange)] = []
+        manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(for: container)) {
+            rect, used, _, glyphs, _ in rows.append((rect, used, glyphs))
+        }
+        for (rect, used, range) in rows.dropLast() {
+            let chars = manager.characterRange(forGlyphRange: range, actualGlyphRange: nil)
+            guard chars.length > 0, range.length > 1,
+                  NSMaxRange(chars) < source.length else { continue }
+            // NSString indexes UTF-16 code units; a row can end on a low surrogate.
+            // Compare newline units directly rather than force-unwrapping a scalar.
+            let last = source.character(at: NSMaxRange(chars) - 1)
+            guard last != 0x0A, last != 0x0D, last != 0x2028, last != 0x2029 else { continue }
+            let remainder = rect.maxX - used.maxX
+            guard remainder > 0.25 else { continue }
+            var boundaries: Set<Int> = []
+            for glyph in (range.location + 1)..<NSMaxRange(range) {
+                let previous = manager.characterIndexForGlyph(at: glyph - 1)
+                let current = manager.characterIndexForGlyph(at: glyph)
+                // Restrict expansion to adjacent BMP Han: never split shaping runs,
+                // marks, punctuation, emoji, surrogate pairs or the comment attachment.
+                if (0x4E00...0x9FFF).contains(Int(source.character(at: previous))),
+                   (0x4E00...0x9FFF).contains(Int(source.character(at: current))) {
+                    boundaries.insert(glyph)
+                }
+            }
+            guard !boundaries.isEmpty else { continue }
+            let extra = remainder / CGFloat(boundaries.count)
+            // Capture all original glyph locations before changing any run boundary.
+            let positions = (range.location..<NSMaxRange(range)).map { manager.location(forGlyphAt: $0) }
+            var shift: CGFloat = 0
+            for (offset, original) in positions.enumerated() {
+                let glyph = range.location + offset
+                if boundaries.contains(glyph) { shift += extra }
+                manager.setLocation(CGPoint(x: original.x + shift, y: original.y),
+                                    forStartOfGlyphRange: NSRange(location: glyph, length: 1))
+            }
+            var filled = used
+            filled.size.width += remainder
+            manager.setLineFragmentRect(rect, forGlyphRange: range, usedRect: filled)
+        }
+    }
 
     func layoutManager(_ layoutManager: NSLayoutManager,
                        shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<CGRect>,
