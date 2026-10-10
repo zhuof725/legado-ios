@@ -6,7 +6,7 @@ on:
         description: Test scope
         type: choice
         default: smoke
-        options: [smoke, continuity, scroll, typography, native, full]
+        options: [smoke, continuity, scroll, typography, native, paper, full]
   push:
     branches: [main, fix/source-compat-runtime]
     paths: ['Sources/App/CommentViews.swift', 'Sources/App/Reader*.swift', 'Sources/App/*PageTurn*.swift', 'Sources/App/Views.swift', 'Sources/App/VolumeTitleView.swift', 'Sources/App/ChapterTitleView.swift', 'Sources/Store/ReadSettings.swift', 'Sources/Engine/ChapterNavigation.swift', 'Tools/ReaderInteractionTest/**', '.github/workflows/reader-interaction.yml']
@@ -46,6 +46,7 @@ jobs:
           case "$TEST_SUITE" in
             typography) ARGS=(-only-testing:ReaderInteractionTests/TypographyTests/testNativeCJKColumnsBaselinesAndPagination) ;;
             native) ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests) ;;
+            paper) ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests/testNativeCurlCachedChaptersThemeAndRefresh) ;;
             scroll) ARGS=(-only-testing:ReaderInteractionTests/ContinuousScrollTests) ;;
             continuity) ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests -only-testing:ReaderInteractionTests/ContinuousScrollTests -only-testing:ReaderInteractionTests/InteractionTests) ;;
             full) ;;

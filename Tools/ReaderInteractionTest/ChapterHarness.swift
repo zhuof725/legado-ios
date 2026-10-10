@@ -269,16 +269,23 @@ private enum NativeReaderInspection {
         return fields.joined(separator: ";")
     }
 
-    static func visiblePaper(_ page: UIPageViewController, background: UIColor, revision: Int) -> String? {
-        guard let source = page.dataSource else { return nil }
-        func backs(_ node: UIViewController) -> [ReaderPageBack] {
-            (node as? ReaderPageBack).map { [$0] } ?? node.children.flatMap { backs($0) }
+    static func paperCandidates(_ page: UIPageViewController) -> [(ReaderPageBack, ReaderPageHost)] {
+        guard let source = page.dataSource, let front = page.viewControllers?.first else { return [] }
+        return [source.pageViewController(page, viewControllerBefore: front),
+                source.pageViewController(page, viewControllerAfter: front)].compactMap { candidate in
+            guard let back = candidate as? ReaderPageBack,
+                  let paper = source.pageViewController(page, viewControllerBefore: back) as? ReaderPageHost else { return nil }
+            return (back, paper)
         }
-        for back in backs(page) {
-            guard back.view.window != nil, let rendered = paragraph(back.view),
+    }
+
+    static func visiblePaper(_ candidates: [(ReaderPageBack, ReaderPageHost)], background: UIColor, revision: Int) -> String? {
+        // UIKit 把纸背绘成卷页纹理后可移出 window/children；保留 dataSource 的真实对象，
+        // 检查生成后的字形，而不要求卷页快照阶段它仍是活跃窗口中的子视图。
+        for (back, paper) in candidates {
+            guard let rendered = paragraph(back.view),
                   let body = rendered.attributedText, body.length > 0,
                   rendered.bounds.width > 0, rendered.bounds.height > 0,
-                  let paper = source.pageViewController(page, viewControllerBefore: back) as? ReaderPageHost,
                   let chapter = Int(paper.contentID) else { continue }
             let prefix = "第\(chapter + 1)章，第\(paper.pageIndex + 1)页。正文版本\(revision)。"
             let valid = body.string.hasPrefix(prefix) && matches(back.view.backgroundColor, background,
@@ -306,6 +313,7 @@ private final class NativeDragObservation: NSObject {
     private var recognizers: [UIGestureRecognizer] = []
     private var readProgress: (() -> String)?
     private var background = UIColor.white
+    private var papers: [(ReaderPageBack, ReaderPageHost)] = []
     private var revision = 0
     private(set) var snapshot = "observed=false"
 
@@ -316,6 +324,7 @@ private final class NativeDragObservation: NSObject {
         snapshot = "observed=false"
         guard let page = NativeReaderInspection.pageController() else { return }
         self.page = page
+        papers = NativeReaderInspection.paperCandidates(page)
         self.readProgress = readProgress
         func scrollPans(_ view: UIView) -> [UIGestureRecognizer] {
             var result: [UIGestureRecognizer] = []
@@ -335,7 +344,7 @@ private final class NativeDragObservation: NSObject {
             snapshot = "observed=true;duringIdle=false;duringCurl=\(page.transitionStyle == .pageCurl);" + readProgress()
         }
         if page.transitionStyle == .pageCurl {
-            guard let paper = NativeReaderInspection.visiblePaper(page, background: background, revision: revision) else { return }
+            guard let paper = NativeReaderInspection.visiblePaper(papers, background: background, revision: revision) else { return }
             snapshot += ";" + paper
         }
         disarm()
