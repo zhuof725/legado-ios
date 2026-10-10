@@ -20,17 +20,19 @@ final class TypographyTests: XCTestCase {
         detail.name = "production-glyph-metrics"
         detail.lifetime = .keepAlways
         add(detail)
-        XCTAssertLessThanOrEqual(try number("balancedGlyphEdge"), 0.75, metrics.label)
-        XCTAssertLessThanOrEqual(try number("balancedInkGap"), 0.18, metrics.label)
-        XCTAssertGreaterThan(try number("balancedInkChecked"), 40, metrics.label)
-        XCTAssertLessThanOrEqual(try number("balancedRepeatError"), 0.01, metrics.label)
-        XCTAssertLessThanOrEqual(try number("balancedEdge"), 0.75, metrics.label)
-        XCTAssertLessThanOrEqual(try number("balancedSpread"), 0.25, metrics.label)
-        // Mixed quote rows may need up to 50% extra advance after compact punctuation.
-        // The actual glyph edge and ink-gap checks below remain independent guards.
-        XCTAssertLessThanOrEqual(try number("balancedMaxStep"), 1.5, metrics.label)
-        XCTAssertGreaterThan(try number("balancedRows"), 40, metrics.label)
-        XCTAssertEqual(report["balancedBreaksOK"] as? Bool, true, metrics.label)
+        XCTAssertEqual(report["quoteCorrectFont"] as? Bool, true, metrics.label)
+        XCTAssertEqual(report["quoteDistinctGlyphs"] as? Bool, true, metrics.label)
+        XCTAssertEqual(report["quoteSourceOK"] as? Bool, true, metrics.label)
+        XCTAssertEqual((report["quoteGlyphs"] as? [[String: Any]])?.count, 16, metrics.label)
+        // Genuine adjacent Han remains exactly one cell at 19/23/24/26 pt,
+        // including nested quotes; never trade a straight right edge for broken words.
+        XCTAssertLessThanOrEqual(try number("naturalStepError"), 0.25, metrics.label)
+        XCTAssertLessThanOrEqual(try number("naturalEdgeCells"), 2.5, metrics.label)
+        XCTAssertGreaterThan(try number("naturalHanPairs"), 70, metrics.label)
+        XCTAssertGreaterThan(try number("naturalRows"), 35, metrics.label)
+        XCTAssertEqual(try number("naturalTerminalRows"), 16, metrics.label)
+        XCTAssertEqual(report["naturalBreaksOK"] as? Bool, true, metrics.label)
+        XCTAssertEqual(report["naturalSourceOK"] as? Bool, true, metrics.label)
         XCTAssertEqual(report["referenceCompact"] as? Bool, true, metrics.label)
         XCTAssertEqual(report["referencePreserved"] as? Bool, true, metrics.label)
         XCTAssertLessThan(try number("referenceOpeningError"), 0.18, metrics.label)

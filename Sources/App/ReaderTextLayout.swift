@@ -8,6 +8,7 @@ enum ReaderTextLayout {
     struct Metrics {
         let font: UIFont
         let cjkFont: UIFont
+        let quoteFont: UIFont
         let cellWidth: CGFloat
         let tracking: CGFloat
         let lineHeight: CGFloat
@@ -18,6 +19,7 @@ enum ReaderTextLayout {
     private struct Fonts {
         let body: UIFont
         let cjk: UIFont
+        let quote: UIFont
         let advance: CGFloat
         let ascent: CGFloat
         let descent: CGFloat
@@ -67,7 +69,10 @@ enum ReaderTextLayout {
             let punctuationAdvances = Dictionary(uniqueKeysWithValues: contextualPunctuation.map {
                 ($0, advance(of: String(UnicodeScalar($0)!), font: fullWidth))
             })
-            fonts = Fonts(body: body, cjk: fullWidth,
+            // “/”/‘/’ 必须使用 PingFang 原生弯曲字形：系统西文字体在
+            // 中文上下文中的引号虽仍是 U+201C/U+201D，却画成两根斜直线。
+            // 只对句读启用等宽特性，不让特性替换原始引号字形。
+            fonts = Fonts(body: body, cjk: fullWidth, quote: cjk,
                           advance: max(advance(of: "汉", font: fullWidth), 1),
                           ascent: ascent, descent: descent, punctuationAdvances: punctuationAdvances)
             fontCache[size] = fonts
@@ -76,7 +81,7 @@ enum ReaderTextLayout {
         let columns = available.map { max(floor($0 / fonts.advance), 1) } ?? 1
         let cell = available.map { max($0 / columns, fonts.advance) } ?? fonts.advance
         let height = ceil(fonts.ascent + fonts.descent)
-        return Metrics(font: fonts.body, cjkFont: fonts.cjk, cellWidth: cell,
+        return Metrics(font: fonts.body, cjkFont: fonts.cjk, quoteFont: fonts.quote, cellWidth: cell,
                        tracking: cell - fonts.advance, lineHeight: height,
                        baseline: fonts.ascent + (height - fonts.ascent - fonts.descent) * 0.5,
                        punctuationAdvances: fonts.punctuationAdvances)
@@ -167,22 +172,16 @@ enum ReaderTextLayout {
         }
         resolvePunctuation(rightIsGrid: false)
         finishRun()
-        // Optical exceptions are limited to CJK-context curly quotes and a sentence
-        // stop immediately before a closing quote. Keep the source and UTF-16 ranges
-        // intact; Han, ellipses and all other grid runs retain their cell advances.
+        // PingFang SC draws authentic curved U+2018/19/1C/1D glyphs. Assign it
+        // directly only to CJK-context quotes, with a proportional advance; do not
+        // substitute characters or expand adjacent Han to hide a width mismatch.
         let source = text as NSString
         let quotes = CharacterSet(charactersIn: "‘’“”")
         for index in 0..<source.length {
             guard let scalar = UnicodeScalar(source.character(at: index)), quotes.contains(scalar),
                   result.attribute(.kern, at: index, effectiveRange: nil) != nil else { continue }
-            result.addAttributes([.font: grid.font, .kern: 0, .ligature: 0],
+            result.addAttributes([.font: grid.quoteFont, .kern: 0, .ligature: 0],
                                  range: NSRange(location: index, length: 1))
-            if "’”".unicodeScalars.contains(scalar), index > 0,
-               let previous = UnicodeScalar(source.character(at: index - 1)),
-               "，。、；：！？".unicodeScalars.contains(previous) {
-                result.addAttribute(.kern, value: grid.tracking - grid.cellWidth * 0.5,
-                                    range: NSRange(location: index - 1, length: 1))
-            }
         }
         result.addAttribute(.paragraphStyle, value: style,
                             range: NSRange(location: 0, length: result.length))
@@ -267,66 +266,10 @@ enum ReaderTextLayout {
     }
 }
 
-/// TextKit 负责塑形、合法断行和附件；统一基线后，仅在汉字边界补偿引号压缩产生的行宽余量。
+/// TextKit 负责原生塑形、合法断行和附件；代理只固定混排基线，不改写逐字位置。
 /// NSLayoutManager.delegate 是弱引用，静态实例确保渲染器/分页器始终使用同一规则。
 private final class ReaderLineMetrics: NSObject, NSLayoutManagerDelegate {
     static let shared = ReaderLineMetrics()
-    private var balancing = Set<ObjectIdentifier>()
-
-    func layoutManager(_ manager: NSLayoutManager, didCompleteLayoutFor container: NSTextContainer?,
-                       atEnd layoutFinishedFlag: Bool) {
-        guard let container, let storage = manager.textStorage else { return }
-        let identity = ObjectIdentifier(manager)
-        guard balancing.insert(identity).inserted else { return }
-        defer { balancing.remove(identity) }
-        let source = storage.string as NSString
-        // No compressed CJK quote means the original integer-column layout is unchanged.
-        guard source.rangeOfCharacter(from: CharacterSet(charactersIn: "‘’“”")).location != NSNotFound else { return }
-        var rows: [(CGRect, CGRect, NSRange)] = []
-        manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(for: container)) {
-            rect, used, _, glyphs, _ in rows.append((rect, used, glyphs))
-        }
-        for (rect, used, range) in rows.dropLast() {
-            let chars = manager.characterRange(forGlyphRange: range, actualGlyphRange: nil)
-            guard chars.length > 0, range.length > 1,
-                  NSMaxRange(chars) < source.length else { continue }
-            // NSString indexes UTF-16 code units; a row can end on a low surrogate.
-            // Compare newline units directly rather than force-unwrapping a scalar.
-            let last = source.character(at: NSMaxRange(chars) - 1)
-            guard last != 0x0A, last != 0x0D, last != 0x2028, last != 0x2029 else { continue }
-            // An attachment may wrap onto its own final row. The preceding text
-            // is still the paragraph's terminal line and must retain natural spacing.
-            let suffix = source.substring(from: NSMaxRange(chars))
-            guard suffix.contains(where: { !$0.isWhitespace && $0 != "\u{FFFC}" }) else { continue }
-            let remainder = rect.maxX - used.maxX
-            guard remainder > 0.25 else { continue }
-            var boundaries: Set<Int> = []
-            for glyph in (range.location + 1)..<NSMaxRange(range) {
-                let previous = manager.characterIndexForGlyph(at: glyph - 1)
-                let current = manager.characterIndexForGlyph(at: glyph)
-                // Restrict expansion to adjacent BMP Han: never split shaping runs,
-                // marks, punctuation, emoji, surrogate pairs or the comment attachment.
-                if (0x4E00...0x9FFF).contains(Int(source.character(at: previous))),
-                   (0x4E00...0x9FFF).contains(Int(source.character(at: current))) {
-                    boundaries.insert(glyph)
-                }
-            }
-            guard !boundaries.isEmpty else { continue }
-            let extra = remainder / CGFloat(boundaries.count)
-            // Capture all original glyph locations before changing any run boundary.
-            let positions = (range.location..<NSMaxRange(range)).map { manager.location(forGlyphAt: $0) }
-            var shift: CGFloat = 0
-            for (offset, original) in positions.enumerated() {
-                let glyph = range.location + offset
-                if boundaries.contains(glyph) { shift += extra }
-                manager.setLocation(CGPoint(x: original.x + shift, y: original.y),
-                                    forStartOfGlyphRange: NSRange(location: glyph, length: 1))
-            }
-            var filled = used
-            filled.size.width += remainder
-            manager.setLineFragmentRect(rect, forGlyphRange: range, usedRect: filled)
-        }
-    }
 
     func layoutManager(_ layoutManager: NSLayoutManager,
                        shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<CGRect>,

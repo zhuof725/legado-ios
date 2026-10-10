@@ -296,78 +296,86 @@ private enum TypographyInspection {
                 "bubbleGapError": Double(bubbleGapError), "bubbleBaselineError": Double(bubbleBaselineError)]
     }
 
-    private static func balancedRowsReport() -> [String: Any] {
+    /// 检查真实整段 + 内层引号的原生排版；不能用“每行必须填满”掩盖字间拉伸。
+    private static func quoteGlyphReport() -> [String: Any] {
+        let view = ReaderTextLayout.makeTextView()
+        ReaderTextLayout.configure(view)
+        var correctFont = true, distinctGlyphs = true, sourceOK = true
+        var glyphNames: [[String: Any]] = []
+        for size in [CGFloat(19), 23, 24, 26] {
+            let text = "“陈迹，‘很轻’，可以吗？”"
+            _ = layout(view, text: text, width: 351, size: size, spacing: 8)
+            let ns = text as NSString
+            sourceOK = sourceOK && view.textStorage.string == text
+            let font = ReaderTextLayout.metrics(fontSize: size, width: 351).quoteFont
+            let actualName = CTFontCopyPostScriptName(font as CTFont) as String
+            var ids: [String: Int] = [:]
+            for index in 0..<ns.length {
+                let code = ns.character(at: index)
+                guard [0x2018, 0x2019, 0x201C, 0x201D].contains(code) else { continue }
+                let applied = view.textStorage.attribute(.font, at: index, effectiveRange: nil) as? UIFont
+                correctFont = correctFont && applied.map { CTFontCopyPostScriptName($0 as CTFont) as String == actualName } == true
+                let key = ns.substring(with: NSRange(location: index, length: 1))
+                let glyph = view.layoutManager.glyphIndexForCharacter(at: index)
+                ids[key] = Int(view.layoutManager.glyph(at: glyph))
+                glyphNames.append(["size": Double(size), "quote": key,
+                    "unicode": Int(code), "font": actualName, "glyph": ids[key] ?? -1])
+            }
+            distinctGlyphs = distinctGlyphs && ids["“"] != ids["”"] && ids["‘"] != ids["’"]
+                && ids.count == 4 && ids.values.allSatisfy { $0 > 0 }
+        }
+        return ["quoteCorrectFont": correctFont, "quoteDistinctGlyphs": distinctGlyphs,
+                "quoteSourceOK": sourceOK, "quoteGlyphs": glyphNames]
+    }
+
+    private static func naturalRowsReport() -> [String: Any] {
         let view = ReaderTextLayout.makeTextView()
         ReaderTextLayout.configure(view)
         var samples: [[String: Any]] = []
-        var edge: CGFloat = 0, spread: CGFloat = 0, maxStep: CGFloat = 0
-        var checked = 0, inkChecked = 0
-        var glyphEdge: CGFloat = 0, inkGap: CGFloat = 0, repeatError: CGFloat = 0
-        var breaksOK = true
+        var stepError: CGFloat = 0, edgeCells: CGFloat = 0
+        var checked = 0, terminalRows = 0, hanPairs = 0
+        var breaksOK = true, sourceOK = true
         for size in [CGFloat(19), 23, 24, 26] {
             for width in [CGFloat(333.5), 351, 362, 370] {
                 let text = ReferenceTypography.texts[2]
                 let ns = text as NSString
                 let grid = ReaderTextLayout.metrics(fontSize: size, width: width)
                 _ = layout(view, text: text, count: 99, width: width, size: size, spacing: 8)
+                sourceOK = sourceOK && view.textStorage.string == text + " \u{FFFC}"
                 let manager = view.layoutManager
                 let rows = lines(view)
-                for (ri, row) in rows.enumerated() {
+                for row in rows {
                     let cr = manager.characterRange(forGlyphRange: row.glyphs, actualGlyphRange: nil)
                     let part = (view.textStorage.string as NSString).substring(with: cr)
                     if let first = part.first, let last = part.last {
                         breaksOK = breaksOK && !"，。！？；：、’”】》」".contains(first)
                             && !"‘“【《「".contains(last)
                     }
-                    var steps: [CGFloat] = []
                     for g in (row.glyphs.location + 1)..<NSMaxRange(row.glyphs) {
                         let a = manager.characterIndexForGlyph(at: g - 1)
                         let b = manager.characterIndexForGlyph(at: g)
                         if b < ns.length, (0x4E00...0x9FFF).contains(Int(ns.character(at: a))),
                            (0x4E00...0x9FFF).contains(Int(ns.character(at: b))) {
-                            steps.append(manager.location(forGlyphAt: g).x - manager.location(forGlyphAt: g - 1).x)
+                            let step = manager.location(forGlyphAt: g).x - manager.location(forGlyphAt: g - 1).x
+                            stepError = max(stepError, abs(step - grid.cellWidth))
+                            hanPairs += 1
                         }
-                    }
-                    if let lo = steps.min(), let hi = steps.max() {
-                        spread = max(spread, hi - lo)
-                        maxStep = max(maxStep, hi / grid.cellWidth)
                     }
                     let terminal = NSMaxRange(cr) >= ns.length
-                    if terminal {
-                        for step in steps { repeatError = max(repeatError, abs(step - grid.cellWidth)) }
-                    }
-                    if !terminal {
-                        edge = max(edge, abs(width - row.used.maxX))
-                        let lastGlyph = NSMaxRange(row.glyphs) - 1
-                        let lastChar = manager.characterIndexForGlyph(at: lastGlyph)
-                        if lastChar < ns.length,
-                           (0x4E00...0x9FFF).contains(Int(ns.character(at: lastChar))) {
-                            // Independent of usedRect: final Han origin plus its actual cell advance.
-                            let right = row.rect.minX + manager.location(forGlyphAt: lastGlyph).x + grid.cellWidth
-                            glyphEdge = max(glyphEdge, abs(width - right))
-                            if let painted = ink(view, character: lastChar) {
-                                inkGap = max(inkGap, abs(width - painted.maxX) / grid.cellWidth)
-                                inkChecked += 1
-                            }
-                        }
+                    if terminal { terminalRows += 1 }
+                    else {
+                        edgeCells = max(edgeCells, max(0, width - row.used.maxX) / grid.cellWidth)
                         checked += 1
                     }
                     samples.append(["size": Double(size), "width": Double(width), "text": part,
-                        "right": Double(row.used.maxX), "terminal": terminal,
-                        "minStep": Double(steps.min() ?? 0), "maxStep": Double(steps.max() ?? 0)])
-                }
-                let before = (0..<manager.numberOfGlyphs).map { manager.location(forGlyphAt: $0) }
-                manager.delegate?.layoutManager?(manager, didCompleteLayoutFor: view.textContainer, atEnd: true)
-                for (glyph, point) in before.enumerated() {
-                    repeatError = max(repeatError, abs(point.x - manager.location(forGlyphAt: glyph).x))
+                        "right": Double(row.used.maxX), "terminal": terminal])
                 }
             }
         }
-        return ["balancedGlyphEdge": Double(glyphEdge), "balancedInkGap": Double(inkGap),
-                "balancedInkChecked": inkChecked, "balancedRepeatError": Double(repeatError),
-                "balancedEdge": Double(edge), "balancedSpread": Double(spread),
-                "balancedMaxStep": Double(maxStep), "balancedRows": checked,
-                "balancedBreaksOK": breaksOK, "balancedSamples": samples]
+        return ["naturalStepError": Double(stepError), "naturalEdgeCells": Double(edgeCells),
+                "naturalHanPairs": hanPairs, "naturalRows": checked,
+                "naturalTerminalRows": terminalRows, "naturalBreaksOK": breaksOK,
+                "naturalSourceOK": sourceOK, "naturalSamples": samples]
     }
 
     private static func referenceReport() -> [String: Any] {
@@ -548,11 +556,8 @@ private enum TypographyInspection {
                                     let mark = ns.substring(with: NSRange(location: ci, length: 1))
                                     var expected = grid.cellWidth
                                     if "‘’“”".contains(mark) {
-                                        let sample = NSAttributedString(string: mark, attributes: [.font: grid.font, .kern: 0, .ligature: 0])
+                                        let sample = NSAttributedString(string: mark, attributes: [.font: grid.quoteFont, .kern: 0, .ligature: 0])
                                         expected = CGFloat(CTLineGetTypographicBounds(CTLineCreateWithAttributedString(sample), nil, nil, nil))
-                                    } else if "，。、；：！？".contains(mark), ci + 1 < ns.length,
-                                              "’”".contains(ns.substring(with: NSRange(location: ci + 1, length: 1))) {
-                                        expected -= grid.cellWidth * 0.5
                                     }
                                     let next = manager.characterIndexForGlyph(at: glyph)
                                     let adjacentHan = (0x4E00...0x9FFF).contains(Int(ns.character(at: ci)))
@@ -711,7 +716,8 @@ private enum TypographyInspection {
         ]
         report.merge(bottomReport()) { _, new in new }
         report.merge(scrollHostReport()) { _, new in new }
-        report.merge(balancedRowsReport()) { _, new in new }
+        report.merge(quoteGlyphReport()) { _, new in new }
+        report.merge(naturalRowsReport()) { _, new in new }
         report.merge(referenceReport()) { _, new in new }
         report.merge(punctuationReport()) { _, new in new }
         guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),
