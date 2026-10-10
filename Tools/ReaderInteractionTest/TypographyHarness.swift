@@ -294,6 +294,56 @@ private enum TypographyInspection {
                 "bubbleGapError": Double(bubbleGapError), "bubbleBaselineError": Double(bubbleBaselineError)]
     }
 
+    private static func balancedRowsReport() -> [String: Any] {
+        let view = ReaderTextLayout.makeTextView()
+        ReaderTextLayout.configure(view)
+        var samples: [[String: Any]] = []
+        var edge: CGFloat = 0, spread: CGFloat = 0, maxStep: CGFloat = 0
+        var checked = 0
+        var breaksOK = true
+        for size in [CGFloat(19), 23, 24, 26] {
+            for width in [CGFloat(333.5), 351, 362, 370] {
+                let text = ReferenceTypography.texts[2]
+                let ns = text as NSString
+                let grid = ReaderTextLayout.metrics(fontSize: size, width: width)
+                _ = layout(view, text: text, count: 99, width: width, size: size, spacing: 8)
+                let manager = view.layoutManager
+                let rows = lines(view)
+                for (ri, row) in rows.enumerated() {
+                    let cr = manager.characterRange(forGlyphRange: row.glyphs, actualGlyphRange: nil)
+                    let part = (view.textStorage.string as NSString).substring(with: cr)
+                    if let first = part.first, let last = part.last {
+                        breaksOK = breaksOK && !"，。！？；：、’”】》」".contains(first)
+                            && !"‘“【《「".contains(last)
+                    }
+                    var steps: [CGFloat] = []
+                    for g in (row.glyphs.location + 1)..<NSMaxRange(row.glyphs) {
+                        let a = manager.characterIndexForGlyph(at: g - 1)
+                        let b = manager.characterIndexForGlyph(at: g)
+                        if b < ns.length, (0x4E00...0x9FFF).contains(Int(ns.character(at: a))),
+                           (0x4E00...0x9FFF).contains(Int(ns.character(at: b))) {
+                            steps.append(manager.location(forGlyphAt: g).x - manager.location(forGlyphAt: g - 1).x)
+                        }
+                    }
+                    if let lo = steps.min(), let hi = steps.max() {
+                        spread = max(spread, hi - lo)
+                        maxStep = max(maxStep, hi / grid.cellWidth)
+                    }
+                    if ri < rows.count - 1 {
+                        edge = max(edge, abs(width - row.used.maxX))
+                        checked += 1
+                    }
+                    samples.append(["size": Double(size), "width": Double(width), "text": part,
+                        "right": Double(row.used.maxX), "terminal": ri == rows.count - 1,
+                        "minStep": Double(steps.min() ?? 0), "maxStep": Double(steps.max() ?? 0)])
+                }
+            }
+        }
+        return ["balancedEdge": Double(edge), "balancedSpread": Double(spread),
+                "balancedMaxStep": Double(maxStep), "balancedRows": checked,
+                "balancedBreaksOK": breaksOK, "balancedSamples": samples]
+    }
+
     private static func referenceReport() -> [String: Any] {
         let view = ReaderTextLayout.makeTextView()
         ReaderTextLayout.configure(view)
@@ -624,6 +674,7 @@ private enum TypographyInspection {
         ]
         report.merge(bottomReport()) { _, new in new }
         report.merge(scrollHostReport()) { _, new in new }
+        report.merge(balancedRowsReport()) { _, new in new }
         report.merge(referenceReport()) { _, new in new }
         report.merge(punctuationReport()) { _, new in new }
         guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),
@@ -654,7 +705,7 @@ private struct ReferenceTypographyPage: View {
             let config = configuration(geometry.size)
             let pages = ReaderPaginator.paginate(ReferenceTypography.blocks, configuration: config)
             if let page = pages.first {
-                PageContentView(page: page, fontSize: 19, lineSpacing: 8,
+                PageContentView(page: page, fontSize: 24, lineSpacing: 8,
                     fg: Color(red: 0.25, green: 0.24, blue: 0.21),
                     bg: Color(red: 0.98, green: 0.96, blue: 0.91), title: "1、归零",
                     pageNumber: 1, pageCount: pages.count, onTapComment: { _ in },
@@ -664,7 +715,7 @@ private struct ReferenceTypographyPage: View {
         }.ignoresSafeArea()
     }
     private func configuration(_ size: CGSize) -> ReaderPaginator.Configuration {
-        var value = ReaderPaginator.Configuration(pageSize: size, fontSize: 19, lineSpacing: 8,
+        var value = ReaderPaginator.Configuration(pageSize: size, fontSize: 24, lineSpacing: 8,
             paragraphSpacing: 8, leftInset: 16, rightInset: 16, topInset: 90, bottomInset: 30)
         value.chapterTitle = "1、归零"
         return value
