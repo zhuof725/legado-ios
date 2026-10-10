@@ -38,6 +38,8 @@ final class ReaderPageBack: UIViewController {
     let contentID: String
     let generation: UUID
     private let textHost = UIHostingController<AnyView>(rootView: AnyView(EmptyView()))
+    private var laidOutSize = CGSize.zero
+    private var contentNeedsLayout = true
 
     init(before index: Int, contentID: String, generation: UUID, content: AnyView,
          background: UIColor, size: CGSize) {
@@ -69,18 +71,30 @@ final class ReaderPageBack: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // 不给已变换的 view 设置 frame；UIKit 后续赋予真实尺寸时也会重新布局。
-        textHost.view.bounds = CGRect(origin: .zero, size: view.bounds.size)
+        layoutText()
+    }
+
+    private func layoutText() {
+        let size = view.bounds.size
+        guard size.width > 0, size.height > 0 else { return }
+        // 离屏 UIHostingController 不一定收到 UIKit 的布局回调。显式测量才能让
+        // UIViewRepresentable 正文在 pageCurl 取纹理之前生成字形与实际高度。
+        if contentNeedsLayout || laidOutSize != size {
+            contentNeedsLayout = false
+            laidOutSize = size
+            _ = textHost.sizeThatFits(in: size)
+        }
+        textHost.view.bounds = CGRect(origin: .zero, size: size)
         textHost.view.center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        textHost.view.setNeedsLayout()
         textHost.view.layoutIfNeeded()
     }
 
     func prepareIfNeeded(size: CGSize) {
-        // 零尺寸预取不缓存成空纸；再次查询时可先按容器尺寸排版，最终尺寸仍由 UIKit 决定。
-        guard view.bounds.isEmpty, size.width > 0, size.height > 0 else { return }
-        view.bounds = CGRect(origin: .zero, size: size)
-        view.setNeedsLayout()
-        view.layoutIfNeeded()
+        if view.bounds.isEmpty, size.width > 0, size.height > 0 {
+            view.bounds = CGRect(origin: .zero, size: size)
+        }
+        layoutText()
     }
 
     func updateContent(_ content: AnyView, background: UIColor) {
@@ -88,6 +102,8 @@ final class ReaderPageBack: UIViewController {
         view.backgroundColor = background.withAlphaComponent(1)
         textHost.view.backgroundColor = view.backgroundColor
         textHost.view.isOpaque = true
+        contentNeedsLayout = true
+        layoutText()
         view.setNeedsLayout()
         view.layoutIfNeeded()
     }

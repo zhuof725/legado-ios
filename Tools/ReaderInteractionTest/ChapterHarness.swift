@@ -244,7 +244,12 @@ private enum NativeReaderInspection {
             return body.string.hasPrefix("第\(chapter + 1)章，第\(paper.pageIndex + 1)页。正文版本\(revision)。")
                 && matches(ink, expectedInk, traits: back.view.traitCollection)
         }
+        let paperDiagnostics = backs.map { back -> String in
+            guard let rendered = paragraph(back.view) else { return "no-paragraph-\(back.view.bounds.size)" }
+            return "\(rendered.bounds.size):\(rendered.attributedText.string.prefix(25))"
+        }.joined(separator: "|")
         let fields = [
+            "paperDiagnostics=\(paperDiagnostics)",
             "native=\(type(of: page) == UIPageViewController.self)", "transition=\(page.transitionStyle == .pageCurl ? "curl" : "scroll")",
             "double=\(page.isDoubleSided)", "idle=\((page.delegate as? PageTurnCoordinator)?.isIdle == true)",
             "current=\(key(host))", "before=\(key(before.face))", "after=\(key(after.face))",
