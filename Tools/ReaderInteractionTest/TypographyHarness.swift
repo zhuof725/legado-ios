@@ -27,6 +27,14 @@ struct TypographyHarnessView: View {
     private let title = "这是一个很长的章节标题，用来确认标题不会被截断或从阅读页面消失"
 
     var body: some View {
+        if ProcessInfo.processInfo.arguments.contains("--reference-page") {
+            ReferenceTypographyPage()
+        } else {
+            inspectionBody
+        }
+    }
+
+    private var inspectionBody: some View {
         ZStack {
             Color.white.ignoresSafeArea()
             ScrollView {
@@ -286,6 +294,45 @@ private enum TypographyInspection {
                 "bubbleGapError": Double(bubbleGapError), "bubbleBaselineError": Double(bubbleBaselineError)]
     }
 
+    private static func referenceReport() -> [String: Any] {
+        let view = ReaderTextLayout.makeTextView()
+        ReaderTextLayout.configure(view)
+        var compact = true, preserved = true
+        var openingError: CGFloat = 0, maxGap: CGFloat = 0
+        var checks = 0
+        for size in [CGFloat(12), 19, 36] {
+            let width: CGFloat = 351
+            let grid = ReaderTextLayout.metrics(fontSize: size, width: width)
+            for (index, text) in ReferenceTypography.texts.enumerated() {
+                _ = layout(view, text: text, count: ReferenceTypography.counts[index], width: width, size: size, spacing: 8)
+                preserved = preserved && view.textStorage.string == text + " \u{FFFC}"
+                let ns = text as NSString
+                if text.hasPrefix("“"), let opening = ink(view, character: 0) {
+                    openingError = max(openingError, abs(opening.minX - grid.cellWidth * 2) / grid.cellWidth)
+                }
+                for ci in 1..<ns.length {
+                    let mark = ns.substring(with: NSRange(location: ci, length: 1))
+                    let previous = ns.substring(with: NSRange(location: ci - 1, length: 1))
+                    guard "‘’“”、".contains(mark) || "‘’“”".contains(previous),
+                          let left = ink(view, character: ci - 1), let right = ink(view, character: ci),
+                          abs(left.midY - right.midY) < grid.lineHeight,
+                          right.minX >= left.minX else { continue }
+                    let gap = (right.minX - left.maxX) / grid.cellWidth
+                    maxGap = max(maxGap, gap)
+                    compact = compact && gap < 0.8 && gap > -0.2
+                    checks += 1
+                }
+                if text.hasSuffix("”"), let last = ink(view, character: ns.length - 1), let bubble = view.bubbleRect,
+                   bubble.minX > last.maxX {
+                    compact = compact && (bubble.minX - last.maxX) / grid.cellWidth < 0.55
+                }
+            }
+        }
+        return ["referenceCompact": compact, "referencePreserved": preserved,
+                "referenceOpeningError": Double(openingError), "referenceMaxGap": Double(maxGap),
+                "referenceChecks": checks]
+    }
+
     private static func bottomReport() -> [String: Any] {
         var baselineError: CGFloat = 0, overflow: CGFloat = 0, topError: CGFloat = 0
         var checked = 0, continued = 0, comments = 0
@@ -321,6 +368,20 @@ private enum TypographyInspection {
                 for _ in 0..<3 { host.view.setNeedsLayout(); host.view.layoutIfNeeded() }
                 let views = descendants(host.view).sorted {
                     $0.convert(CGPoint.zero, to: host.view).y < $1.convert(CGPoint.zero, to: host.view).y
+                }
+                if index == 0 {
+                    func labels(_ root: UIView) -> [UILabel] {
+                        (root as? UILabel).map { [$0] } ?? root.subviews.flatMap { labels($0) }
+                    }
+                    if let label = labels(host.view).first(where: { $0.accessibilityIdentifier == "chapter-title" }),
+                       let first = views.first {
+                        let frame = label.convert(label.bounds, to: host.view)
+                        let expectedCenter = config.leftInset + config.textWidth / 2
+                        terminalOK = terminalOK && label.textAlignment == .center
+                            && abs(frame.midX - expectedCenter) < 0.75
+                            && abs(first.convert(.zero, to: host.view).y - frame.maxY
+                                - ChapterTitleLayout.bottomSpacing(fontSize: size) - config.paragraphSpacing) < 0.75
+                    } else { terminalOK = false }
                 }
                 let grid = ReaderTextLayout.metrics(fontSize: size, width: config.textWidth)
                 let bottom = config.pageSize.height - 34 - config.bottomInset - 24
@@ -563,9 +624,49 @@ private enum TypographyInspection {
         ]
         report.merge(bottomReport()) { _, new in new }
         report.merge(scrollHostReport()) { _, new in new }
+        report.merge(referenceReport()) { _, new in new }
         report.merge(punctuationReport()) { _, new in new }
         guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8) else { return "invalid" }
         return json
+    }
+}
+
+
+private enum ReferenceTypography {
+    static let texts = [
+        "洛城，秋。",
+        "空洞的办公室里，惨白的白炽灯下，中年医生推了推鼻梁上的眼镜。",
+        "“陈迹你好，我现在需要问你一些问题。你回答后，我会根据我的判断，按照‘无’、‘很轻’、‘中等’、‘严重’、‘非常严重’这五个程度来做出评分，可以吗？”",
+        "“可以。”", "“你想结束生命吗？”", "“……结束谁的生命？”", "“你自己的。”", "“那没有。”",
+        "中年医生迟疑片刻：“你是否记仇，是否很难原谅那些伤害过你的人？”", "“我不记仇。”",
+        "“你是否会常常忘记事情，你是否会感到疲惫？”"
+    ]
+    static let counts = [99,82,99,46,55,99,31,37,42,99,82]
+    static var blocks: [ContentBlock] { texts.enumerated().map {
+        .paragraph(text: $0.element, commentCount: counts[$0.offset], commentURL: nil)
+    } }
+}
+
+private struct ReferenceTypographyPage: View {
+    var body: some View {
+        GeometryReader { geometry in
+            let config = configuration(geometry.size)
+            let pages = ReaderPaginator.paginate(ReferenceTypography.blocks, configuration: config)
+            if let page = pages.first {
+                PageContentView(page: page, fontSize: 19, lineSpacing: 8,
+                    fg: Color(red: 0.25, green: 0.24, blue: 0.21),
+                    bg: Color(red: 0.98, green: 0.96, blue: 0.91), title: "1、归零",
+                    pageNumber: 1, pageCount: pages.count, onTapComment: { _ in },
+                    paragraphSpacing: 8, leftMargin: 16, rightMargin: 16,
+                    topMargin: 90, bottomMargin: 30, showsChapterTitle: true)
+            }
+        }.ignoresSafeArea()
+    }
+    private func configuration(_ size: CGSize) -> ReaderPaginator.Configuration {
+        var value = ReaderPaginator.Configuration(pageSize: size, fontSize: 19, lineSpacing: 8,
+            paragraphSpacing: 8, leftInset: 16, rightInset: 16, topInset: 90, bottomInset: 30)
+        value.chapterTitle = "1、归零"
+        return value
     }
 }

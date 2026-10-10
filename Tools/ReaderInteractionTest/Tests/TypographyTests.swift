@@ -16,6 +16,10 @@ final class TypographyTests: XCTestCase {
         func number(_ key: String) throws -> Double {
             try XCTUnwrap(report[key] as? NSNumber, "Missing \(key): \(metrics.label)").doubleValue
         }
+        XCTAssertEqual(report["referenceCompact"] as? Bool, true, metrics.label)
+        XCTAssertEqual(report["referencePreserved"] as? Bool, true, metrics.label)
+        XCTAssertLessThan(try number("referenceOpeningError"), 0.18, metrics.label)
+        XCTAssertGreaterThan(try number("referenceChecks"), 70, metrics.label)
         for key in ["bottomBaselineError", "bottomOverflow", "bottomTopError"] {
             XCTAssertLessThanOrEqual(try number(key), 0.75, "\(key): \(metrics.label)")
         }
@@ -60,6 +64,14 @@ final class TypographyTests: XCTestCase {
         XCTAssertGreaterThan(try number("breakChecks"), 100, metrics.label)
         XCTAssertLessThanOrEqual(try number("bubbleGapError"), 0.25, metrics.label)
         XCTAssertLessThanOrEqual(try number("bubbleBaselineError"), 0.5, metrics.label)
+        app.terminate()
+        app.launchArguments = ["--typography-mode", "--reference-page"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["chapter-title"].waitForExistence(timeout: 10))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "reference-production-page"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
     }
 
     func testLongChapterTitleIsVisibleAndLayoutControlsPersist() {
