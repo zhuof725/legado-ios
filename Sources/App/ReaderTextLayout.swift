@@ -105,9 +105,11 @@ enum ReaderTextLayout {
         style.maximumLineHeight = grid.lineHeight
         // 段间距和标题仍由外层布局计算；不把最后一行/章尾撑满。
         style.paragraphSpacing = 0
-        // justified 会逐行分配余量（首行缩进、避头尾标点时尤其明显），破坏纵向字列。
-        // 宽度均分为整数字格，满行接近两端齐；避头尾和混排留下的空白不强行拉伸。
-        style.alignment = .left
+        // 正文非末行需要填满可用宽度。TextKit 只对真正的非末行启用
+        // justification，段末行仍保持自然收尾；字形自身的 CJK tracking 和
+        // 引号压缩继续由 attributed runs 提供，避免把标点拉成孤立空格。
+        // 这也让避头尾挪动一个标点后，剩余宽度回到同一行，而不是留在行尾。
+        style.alignment = .justified
         style.lineBreakMode = .byWordWrapping
         style.hyphenationFactor = 0
         style.headIndent = 0
