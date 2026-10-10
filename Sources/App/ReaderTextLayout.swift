@@ -45,7 +45,11 @@ enum ReaderTextLayout {
             let body = UIFont.systemFont(ofSize: size)
             let fallback = CTFontCreateForString(body as CTFont, "汉" as CFString,
                                                 CFRange(location: 0, length: 1))
-            let cjk = (UIFont(name: CTFontCopyPostScriptName(fallback) as String, size: size) ?? body)
+            // 系统 fallback 会随设备语言选择 PingFang HK/TC：其句读可能居中。
+            // 阅读正文采用简体横排字形，让句读落在左下、开闭标点贴向文字侧。
+            // 仍由字体提供 ink bearings，不移动 glyph origin 或破坏整格 advance。
+            let cjk = UIFont(name: "PingFangSC-Regular", size: size)
+                ?? UIFont(name: CTFontCopyPostScriptName(fallback) as String, size: size) ?? body
             // 仅中文使用全宽字形，关闭标点的比例宽度；不把西文/emoji 变成等宽字体。
             let descriptor = cjk.fontDescriptor.addingAttributes([
                 .featureSettings: [[UIFontDescriptor.FeatureKey.type: kTextSpacingType,
@@ -164,7 +168,10 @@ enum ReaderTextLayout {
         resolvePunctuation(rightIsGrid: false)
         finishRun()
         if count > 0 {
-            result.append(NSAttributedString(string: " ", attributes: attrs))
+            // 保留原有的一个分隔字符；显式固定为四分之一字格，避免系统空格宽度漂移。
+            var gapAttributes = attrs
+            gapAttributes[.kern] = grid.cellWidth * 0.25 - advance(of: " ", font: grid.font)
+            result.append(NSAttributedString(string: " ", attributes: gapAttributes))
             let size = max(fontSize - 5, 11)
             let image = CommentBubble.image(count: count, size: size, color: color)
             let attachment = NSTextAttachment()

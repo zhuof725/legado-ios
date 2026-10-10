@@ -183,6 +183,99 @@ private enum TypographyInspection {
                 "scrollGlyphs": glyphs, "scrollSourceOK": sourceOK, "scrollBubbleOK": bubbleOK]
     }
 
+    /// 单独绘制生产 TextKit 的一个字形，读取实际透明位图的墨迹范围。
+    /// 不用 advance / paragraphStyle 代替可见字面位置。
+    private static func ink(_ view: CommentTextView, character: Int) -> CGRect? {
+        let manager = view.layoutManager
+        let range = manager.glyphRange(forCharacterRange: NSRange(location: character, length: 1),
+                                       actualCharacterRange: nil)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 3
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(size: view.bounds.size, format: format).image { _ in
+            manager.drawGlyphs(forGlyphRange: range, at: .zero)
+        }
+        guard let cg = image.cgImage else { return nil }
+        let w = cg.width, h = cg.height
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        let found: CGRect? = pixels.withUnsafeMutableBytes { bytes in
+            guard let context = CGContext(data: bytes.baseAddress, width: w, height: h,
+                bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return nil }
+            context.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            let data = bytes.bindMemory(to: UInt8.self)
+            var minX = w, minY = h, maxX = -1, maxY = -1
+            for y in 0..<h {
+                for x in 0..<w where data[(y * w + x) * 4 + 3] > 32 {
+                    minX = min(minX, x); maxX = max(maxX, x)
+                    minY = min(minY, y); maxY = max(maxY, y)
+                }
+            }
+            guard maxX >= minX else { return nil }
+            return CGRect(x: CGFloat(minX) / 3, y: CGFloat(minY) / 3,
+                          width: CGFloat(maxX - minX + 1) / 3, height: CGFloat(maxY - minY + 1) / 3)
+        }
+        return found
+    }
+
+    private static func punctuationReport() -> [String: Any] {
+        let view = ReaderTextLayout.makeTextView()
+        ReaderTextLayout.configure(view)
+        var inkOK = true, wrappingOK = true
+        var inkChecks = 0, breakChecks = 0
+        var bubbleGapError: CGFloat = 0, bubbleBaselineError: CGFloat = 0
+        var inkSamples: [String: [Double]] = [:]
+        for size in [CGFloat(12), 19, 36] {
+            let width: CGFloat = 351
+            let grid = ReaderTextLayout.metrics(fontSize: size, width: width)
+            // 横排简体句读在左下；开引号/开括号靠右，闭引号/闭括号靠左。
+            for mark in ["，", "。", "！", "‘", "’", "“", "”", "【", "】"] {
+                _ = layout(view, text: "汉" + mark + "汉", width: width, size: size, spacing: 8, continuation: true)
+                guard let bounds = ink(view, character: 1), let han = ink(view, character: 0) else {
+                    inkOK = false; continue
+                }
+                let glyph = view.layoutManager.glyphIndexForCharacter(at: 1)
+                let x = view.layoutManager.location(forGlyphAt: glyph).x
+                let fraction = (bounds.midX - x) / grid.cellWidth
+                inkSamples["\(size):\(mark)"] = [Double(fraction), Double(bounds.midY - han.midY)]
+                if ["‘", "“", "【"].contains(mark) { inkOK = inkOK && fraction > 0.5 }
+                else { inkOK = inkOK && fraction < 0.5 }
+                if ["，", "。"].contains(mark) { inkOK = inkOK && bounds.midY > han.midY }
+                inkChecks += 1
+            }
+            // 不改写标点，不手动插入换行：覆盖不同剩余字格的系统避头尾。
+            for prefix in 0..<12 {
+                let text = String(repeating: "汉", count: prefix) + "‘我的天赋还不错！’亦或者说，这本【素月莲华刀】很好。"
+                _ = layout(view, text: text, width: size * 8.3, size: size, spacing: 8, continuation: true)
+                let string = text as NSString
+                for row in lines(view) {
+                    let chars = view.layoutManager.characterRange(forGlyphRange: row.glyphs, actualGlyphRange: nil)
+                    let part = string.substring(with: chars)
+                    if let first = part.first, let last = part.last {
+                        wrappingOK = wrappingOK && !"，。！’】".contains(first) && !"‘【".contains(last)
+                        breakChecks += 1
+                    }
+                }
+            }
+            let text = "我的天赋还不错！’"
+            _ = layout(view, text: text, width: width, size: size, spacing: 8)
+            let plainBaseline = lines(view).last?.baseline ?? -999
+            let plainHeight = view.bounds.height
+            _ = layout(view, text: text, count: 3, width: width, size: size, spacing: 8)
+            let manager = view.layoutManager
+            let gap = manager.glyphIndexForCharacter(at: (text as NSString).length)
+            let attachment = manager.glyphIndexForCharacter(at: (text as NSString).length + 1)
+            bubbleGapError = max(bubbleGapError, abs(manager.location(forGlyphAt: attachment).x
+                - manager.location(forGlyphAt: gap).x - grid.cellWidth * 0.25))
+            bubbleBaselineError = max(bubbleBaselineError, abs((lines(view).last?.baseline ?? 999) - plainBaseline),
+                                      abs(view.bounds.height - plainHeight))
+        }
+        return ["inkOK": inkOK, "inkChecks": inkChecks, "inkSamples": inkSamples,
+                "wrappingOK": wrappingOK, "breakChecks": breakChecks,
+                "bubbleGapError": Double(bubbleGapError), "bubbleBaselineError": Double(bubbleBaselineError)]
+    }
+
     static func snapshot() -> String {
         precondition(Thread.isMainThread)
         let view = ReaderTextLayout.makeTextView()
@@ -355,6 +448,7 @@ private enum TypographyInspection {
             "commentCount": commentCount, "pages": pages.count, "worstBaseline": worstBaseline
         ]
         report.merge(scrollHostReport()) { _, new in new }
+        report.merge(punctuationReport()) { _, new in new }
         guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8) else { return "invalid" }
         return json

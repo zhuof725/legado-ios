@@ -44,7 +44,7 @@ jobs:
           set -o pipefail
           ARGS=()
           case "$TEST_SUITE" in
-            typography) ARGS=(-only-testing:ReaderInteractionTests/TypographyTests/testNativeCJKColumnsBaselinesAndPagination) ;;
+            typography) ARGS=(-only-testing:ReaderInteractionTests/TypographyTests/testNativeCJKColumnsBaselinesAndPagination -only-testing:ReaderInteractionTests/InteractionTests) ;;
             native) ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests) ;;
             paper) ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests/testNativeCurlCachedChaptersThemeAndRefresh) ;;
             scroll) ARGS=(-only-testing:ReaderInteractionTests/ContinuousScrollTests) ;;

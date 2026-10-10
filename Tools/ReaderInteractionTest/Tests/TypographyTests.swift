@@ -46,6 +46,12 @@ final class TypographyTests: XCTestCase {
         XCTAssertGreaterThan(try number("continuations"), 0, metrics.label)
         XCTAssertGreaterThan(try number("pages"), 1, metrics.label)
         XCTAssertEqual(try number("commentCount"), 1, metrics.label)
+        XCTAssertEqual(report["inkOK"] as? Bool, true, metrics.label)
+        XCTAssertEqual(try number("inkChecks"), 27, metrics.label)
+        XCTAssertEqual(report["wrappingOK"] as? Bool, true, metrics.label)
+        XCTAssertGreaterThan(try number("breakChecks"), 100, metrics.label)
+        XCTAssertLessThanOrEqual(try number("bubbleGapError"), 0.25, metrics.label)
+        XCTAssertLessThanOrEqual(try number("bubbleBaselineError"), 0.5, metrics.label)
     }
 
     func testLongChapterTitleIsVisibleAndLayoutControlsPersist() {
