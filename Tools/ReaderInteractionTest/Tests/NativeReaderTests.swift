@@ -2,7 +2,8 @@ import XCTest
 
 final class NativeReaderTests: XCTestCase {
     func testNativeCurlCachedChaptersThemeAndRefresh() { checkNative("curl") }
-    func testNativeSlideCachedChapters() { checkNative("slide") }
+    // 滑动模式已改为覆盖翻页，由 CoverTurnTests 检查实际跟手几何及跨章。
+
 
     func testNativeCurlSlowChapterFallback() {
         let app = launch("curl", load: "slow")

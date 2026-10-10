@@ -50,7 +50,7 @@ jobs:
             scroll) ARGS=(-only-testing:ReaderInteractionTests/ContinuousScrollTests) ;;
             continuity) ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests -only-testing:ReaderInteractionTests/ContinuousScrollTests -only-testing:ReaderInteractionTests/InteractionTests) ;;
             full) ;;
-            *) ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests -only-testing:ReaderInteractionTests/ContinuousScrollTests -only-testing:ReaderInteractionTests/TypographyTests -only-testing:ReaderInteractionTests/InteractionTests) ;;
+            *) ARGS=(-only-testing:ReaderInteractionTests/NativeReaderTests -only-testing:ReaderInteractionTests/ContinuousScrollTests -only-testing:ReaderInteractionTests/CoverTurnTests -only-testing:ReaderInteractionTests/TypographyTests -only-testing:ReaderInteractionTests/InteractionTests) ;;
           esac
           xcodebuild -project Tools/ReaderInteractionTest/ReaderInteraction.xcodeproj \
             -scheme ReaderHarness -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \

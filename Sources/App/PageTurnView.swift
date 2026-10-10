@@ -5,13 +5,11 @@ import UIKit
 enum PageTurnStyle: Int, CaseIterable {
     case slide = 0   // UIPageViewController.TransitionStyle.scroll
     case curl = 1    // UIPageViewController.TransitionStyle.pageCurl
-    case cover = 2   // 覆盖式滑动（圆角遮盖）
 
     var title: String {
         switch self {
         case .slide: return "滑动"
         case .curl: return "卷页"
-        case .cover: return "覆盖"
         }
     }
 }
@@ -142,9 +140,8 @@ struct PageTurnView: View {
 
     @ViewBuilder var body: some View {
         switch style {
-        case .slide: NativePageTurnView(model: self, transitionStyle: .scroll)
+        case .slide: ReaderCoverPageTurnView(model: self)
         case .curl: NativePageTurnView(model: self, transitionStyle: .pageCurl)
-        case .cover: ReaderCoverPageTurnView(model: self)
         }
     }
 

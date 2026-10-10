@@ -18,6 +18,8 @@ targets:
       - path: VolumeHarness.swift
       - path: TypographyHarness.swift
       - path: ContinuousScrollHarness.swift
+      - path: CoverTurnHarness.swift
+      - path: ../../Sources/App/ReaderCoverPageTurnView.swift
       - path: ../../Sources/App/ReaderContinuousScrollView.swift
       - path: ../../Sources/App/CommentViews.swift
       - path: ../../Sources/App/ReaderTextLayout.swift
