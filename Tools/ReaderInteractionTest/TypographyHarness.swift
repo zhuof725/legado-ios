@@ -332,7 +332,11 @@ private enum TypographyInspection {
                         spread = max(spread, hi - lo)
                         maxStep = max(maxStep, hi / grid.cellWidth)
                     }
-                    if ri < rows.count - 1 {
+                    let terminal = NSMaxRange(cr) >= ns.length
+                    if terminal {
+                        for step in steps { repeatError = max(repeatError, abs(step - grid.cellWidth)) }
+                    }
+                    if !terminal {
                         edge = max(edge, abs(width - row.used.maxX))
                         let lastGlyph = NSMaxRange(row.glyphs) - 1
                         let lastChar = manager.characterIndexForGlyph(at: lastGlyph)
@@ -349,7 +353,7 @@ private enum TypographyInspection {
                         checked += 1
                     }
                     samples.append(["size": Double(size), "width": Double(width), "text": part,
-                        "right": Double(row.used.maxX), "terminal": ri == rows.count - 1,
+                        "right": Double(row.used.maxX), "terminal": terminal,
                         "minStep": Double(steps.min() ?? 0), "maxStep": Double(steps.max() ?? 0)])
                 }
                 let before = (0..<manager.numberOfGlyphs).map { manager.location(forGlyphAt: $0) }

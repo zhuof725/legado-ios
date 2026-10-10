@@ -294,6 +294,10 @@ private final class ReaderLineMetrics: NSObject, NSLayoutManagerDelegate {
             // Compare newline units directly rather than force-unwrapping a scalar.
             let last = source.character(at: NSMaxRange(chars) - 1)
             guard last != 0x0A, last != 0x0D, last != 0x2028, last != 0x2029 else { continue }
+            // An attachment may wrap onto its own final row. The preceding text
+            // is still the paragraph's terminal line and must retain natural spacing.
+            let suffix = source.substring(from: NSMaxRange(chars))
+            guard suffix.contains(where: { !$0.isWhitespace && $0 != "\u{FFFC}" }) else { continue }
             let remainder = rect.maxX - used.maxX
             guard remainder > 0.25 else { continue }
             var boundaries: Set<Int> = []
