@@ -5,11 +5,13 @@ import UIKit
 enum PageTurnStyle: Int, CaseIterable {
     case slide = 0   // UIPageViewController.TransitionStyle.scroll
     case curl = 1    // UIPageViewController.TransitionStyle.pageCurl
+    case cover = 2   // 覆盖式滑动（圆角遮盖）
 
     var title: String {
         switch self {
         case .slide: return "滑动"
         case .curl: return "卷页"
+        case .cover: return "覆盖"
         }
     }
 }
@@ -121,8 +123,8 @@ struct PageTurnChapter {
     let pages: [AnyView]
 }
 
-/// 稳定挂载的系统翻页容器，跨章更新由 Coordinator 排队处理。
-struct PageTurnView: UIViewControllerRepresentable {
+/// 保持调用接口稳定：滑动使用覆盖翻页，卷页继续交给系统容器。
+struct PageTurnView: View {
     let pages: [AnyView]
     @Binding var current: Int
     let style: PageTurnStyle
@@ -138,36 +140,48 @@ struct PageTurnView: UIViewControllerRepresentable {
     /// 仅原生翻页提交后调用；父层原子接纳对应快照和页码，不再发起第二次动画。
     var onChapterTransition: (_ direction: Int, _ pageIndex: Int) -> Void = { _, _ in }
 
-    func makeCoordinator() -> PageTurnCoordinator { PageTurnCoordinator(self) }
-
-    func makeUIViewController(context: Context) -> UIPageViewController {
-        let transition: UIPageViewController.TransitionStyle = style == .curl ? .pageCurl : .scroll
-        let vc = UIPageViewController(transitionStyle: transition, navigationOrientation: .horizontal,
-            options: style == .curl ? [.spineLocation: UIPageViewController.SpineLocation.min.rawValue] : nil)
-        vc.view.backgroundColor = background
-        // 双面仅提供不透明主题纸背；卷曲、阴影、曲线和跟手仍完全由 UIKit 绘制。
-        if style == .curl { vc.isDoubleSided = true }
-        vc.view.clipsToBounds = true
-        vc.delegate = context.coordinator
-        context.coordinator.attach(vc)
-
-        let pan = ChapterTurnPanObserver(target: context.coordinator, action: #selector(PageTurnCoordinator.panned(_:)))
-        pan.delegate = context.coordinator
-        pan.maximumNumberOfTouches = 1
-        pan.cancelsTouchesInView = false
-        pan.delaysTouchesBegan = false
-        pan.delaysTouchesEnded = false
-        vc.view.addGestureRecognizer(pan)
-        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(PageTurnCoordinator.tapped(_:)))
-        tap.delegate = context.coordinator
-        tap.cancelsTouchesInView = false
-        tap.require(toFail: pan)
-        vc.view.addGestureRecognizer(tap)
-        context.coordinator.update(self)
-        return vc
+    @ViewBuilder var body: some View {
+        switch style {
+        case .slide: NativePageTurnView(model: self, transitionStyle: .scroll)
+        case .curl: NativePageTurnView(model: self, transitionStyle: .pageCurl)
+        case .cover: ReaderCoverPageTurnView(model: self)
+        }
     }
 
-    func updateUIViewController(_ vc: UIPageViewController, context: Context) {
-        context.coordinator.update(self)
+    private struct NativePageTurnView: UIViewControllerRepresentable {
+        let model: PageTurnView
+        let transitionStyle: UIPageViewController.TransitionStyle
+
+        func makeCoordinator() -> PageTurnCoordinator { PageTurnCoordinator(model) }
+
+        func makeUIViewController(context: Context) -> UIPageViewController {
+            let vc = UIPageViewController(transitionStyle: transitionStyle, navigationOrientation: .horizontal,
+                options: [.spineLocation: UIPageViewController.SpineLocation.min.rawValue])
+            vc.view.backgroundColor = model.background
+            // 双面仅提供不透明主题纸背；卷曲、阴影、曲线和跟手仍完全由 UIKit 绘制。
+            vc.isDoubleSided = transitionStyle == .pageCurl
+            vc.view.clipsToBounds = true
+            vc.delegate = context.coordinator
+            context.coordinator.attach(vc)
+
+            let pan = ChapterTurnPanObserver(target: context.coordinator, action: #selector(PageTurnCoordinator.panned(_:)))
+            pan.delegate = context.coordinator
+            pan.maximumNumberOfTouches = 1
+            pan.cancelsTouchesInView = false
+            pan.delaysTouchesBegan = false
+            pan.delaysTouchesEnded = false
+            vc.view.addGestureRecognizer(pan)
+            let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(PageTurnCoordinator.tapped(_:)))
+            tap.delegate = context.coordinator
+            tap.cancelsTouchesInView = false
+            tap.require(toFail: pan)
+            vc.view.addGestureRecognizer(tap)
+            context.coordinator.update(model)
+            return vc
+        }
+
+        func updateUIViewController(_ vc: UIPageViewController, context: Context) {
+            context.coordinator.update(model)
+        }
     }
 }

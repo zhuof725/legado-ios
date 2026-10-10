@@ -22,6 +22,8 @@ struct HarnessApp: App {
                 ContinuousScrollHarnessView()
             } else if ProcessInfo.processInfo.arguments.contains("--typography-mode") {
                 TypographyHarnessView()
+            } else if ProcessInfo.processInfo.arguments.contains("--cover-mode") {
+                CoverTurnHarnessView()
             } else if let mode = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--volume-mode=") }) {
                 VolumeHarnessView(mode: String(mode.dropFirst("--volume-mode=".count)))
             } else if let mode = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--chapter-mode=") }) {

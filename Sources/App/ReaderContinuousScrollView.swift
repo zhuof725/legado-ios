@@ -5,6 +5,8 @@ struct ReaderScrollChapter {
     let id: Int
     let revision: String
     let content: AnyView
+    /// 只改变颜色/边界提示时刷新视图，不使已测量正文高度失效。
+    var appearanceID: String = ""
 }
 
 struct ReaderScrollRequest: Equatable {
@@ -21,6 +23,7 @@ struct ReaderContinuousScrollView: UIViewControllerRepresentable {
     let background: UIColor
     let onPosition: (_ chapter: Int, _ permille: Int) -> Void
     let onApproachEdge: (_ direction: Int) -> Void
+    var onSettled: (_ chapter: Int, _ permille: Int) -> Void = { _, _ in }
 
     func makeUIViewController(context: Context) -> ReaderContinuousScrollController {
         let controller = ReaderContinuousScrollController()
@@ -54,10 +57,15 @@ final class ReaderContinuousScrollController: UIViewController, UIScrollViewDele
     private final class Entry {
         let host: UIHostingController<AnyView>
         var revision: String
+        var appearanceID: String
+        var measuredWidth: CGFloat = 0
+        var height: CGFloat = 0
+        var needsMeasurement = true
         var frame = CGRect.zero
-        init(host: UIHostingController<AnyView>, revision: String) {
+        init(host: UIHostingController<AnyView>, revision: String, appearanceID: String) {
             self.host = host
             self.revision = revision
+            self.appearanceID = appearanceID
         }
     }
     private struct Anchor {
@@ -83,6 +91,11 @@ final class ReaderContinuousScrollController: UIViewController, UIScrollViewDele
     private var edgeSent: [Int: Int] = [:]
     private var measuredChanges: [Int: CGFloat] = [:]
     private var heightUpdateQueued = false
+    private var deferredModel: ReaderContinuousScrollView?
+    #if DEBUG
+    private(set) var measurementCount = 0
+    private(set) var contentInstallCount = 0
+    #endif
 
     override func loadView() {
         view = UIView()
@@ -97,13 +110,20 @@ final class ReaderContinuousScrollController: UIViewController, UIScrollViewDele
 
     func update(_ next: ReaderContinuousScrollView) {
         loadViewIfNeeded()
-        let old = model
         let ids = next.chapters.map { $0.id }
-        let changed = ids != order || next.layoutID != layoutID
-            || next.chapters.contains { entries[$0.id]?.revision != $0.revision }
-        let newRequest = next.request?.id != old?.request?.id
+        let layoutChanged = next.layoutID != layoutID
+        let changed = ids != order || layoutChanged || next.chapters.contains {
+            entries[$0.id]?.revision != $0.revision || entries[$0.id]?.appearanceID != $0.appearanceID
+        }
+        let newRequest = next.request?.id != model?.request?.id
+        // 网络返回/状态提示不抢占手指与惯性所在的主线程布局；结束本次滚动后合并更新。
+        if userScrolling && changed && !newRequest {
+            deferredModel = next
+            return
+        }
+        deferredModel = nil
         if changed && pendingAnchor == nil { pendingAnchor = anchor() }
-        reflow = reflow || next.layoutID != layoutID
+        reflow = reflow || layoutChanged
         model = next
         view.backgroundColor = next.background
         scroll.backgroundColor = next.background
@@ -114,28 +134,35 @@ final class ReaderContinuousScrollController: UIViewController, UIScrollViewDele
         }
         if changed {
             let kept = Set(ids)
-            for (id, entry) in entries where !kept.contains(id) {
+            for id in Array(entries.keys) where !kept.contains(id) {
+                guard let entry = entries.removeValue(forKey: id) else { continue }
                 entry.host.willMove(toParent: nil)
                 entry.host.view.removeFromSuperview()
                 entry.host.removeFromParent()
-                entries[id] = nil
             }
             for chapter in next.chapters {
+                let existing = entries[chapter.id]
+                let contentChanged = existing?.revision != chapter.revision || layoutChanged
+                let appearanceChanged = existing?.appearanceID != chapter.appearanceID
+                guard contentChanged || appearanceChanged else { continue }
                 let root = AnyView(MeasuredScrollChapter(content: chapter.content) { [weak self] height in
                     self?.heightChanged(chapter.id, revision: chapter.revision, height: height)
                 })
-                if let entry = entries[chapter.id] {
-                    if entry.revision != chapter.revision || layoutID != next.layoutID {
-                        entry.revision = chapter.revision
-                        entry.host.rootView = root
-                    }
+                #if DEBUG
+                contentInstallCount += 1
+                #endif
+                if let entry = existing {
+                    entry.revision = chapter.revision
+                    entry.appearanceID = chapter.appearanceID
+                    entry.needsMeasurement = entry.needsMeasurement || contentChanged
+                    entry.host.rootView = root
                 } else {
                     let host = UIHostingController(rootView: root)
                     if #available(iOS 16.4, *) { host.safeAreaRegions = [] }
                     addChild(host)
                     scroll.addSubview(host.view)
                     host.didMove(toParent: self)
-                    entries[chapter.id] = Entry(host: host, revision: chapter.revision)
+                    entries[chapter.id] = Entry(host: host, revision: chapter.revision, appearanceID: chapter.appearanceID)
                 }
                 entries[chapter.id]?.host.view.backgroundColor = next.background
             }
@@ -164,11 +191,18 @@ final class ReaderContinuousScrollController: UIViewController, UIScrollViewDele
             var y: CGFloat = 0
             for id in order {
                 guard let entry = entries[id] else { continue }
-                let height = max(ceil(entry.host.sizeThatFits(in: CGSize(width: size.width,
-                    height: CGFloat.greatestFiniteMagnitude)).height), 1)
-                entry.frame = CGRect(x: 0, y: y, width: size.width, height: height)
-                entry.host.view.frame = entry.frame
-                y += height
+                if entry.needsMeasurement || entry.measuredWidth != size.width {
+                    #if DEBUG
+                    measurementCount += 1
+                    #endif
+                    entry.height = max(ceil(entry.host.sizeThatFits(in: CGSize(width: size.width,
+                        height: CGFloat.greatestFiniteMagnitude)).height), 1)
+                    entry.measuredWidth = size.width
+                    entry.needsMeasurement = false
+                }
+                entry.frame = CGRect(x: 0, y: y, width: size.width, height: entry.height)
+                if entry.host.view.frame != entry.frame { entry.host.view.frame = entry.frame }
+                y += entry.height
             }
             // 尾部留白只在短末章之后，不插在章节之间；保证该章可恢复到视口顶端。
             let lastHeight = order.last.flatMap { entries[$0]?.frame.height } ?? size.height
@@ -219,16 +253,23 @@ final class ReaderContinuousScrollController: UIViewController, UIScrollViewDele
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.heightUpdateQueued = false
-            let changes = self.measuredChanges
-            self.measuredChanges.removeAll()
-            guard changes.contains(where: { id, height in
-                guard let entry = self.entries[id] else { return false }
-                return abs(ceil(height) - entry.frame.height) > 1
-            }) else { return }
-            if self.pendingAnchor == nil { self.pendingAnchor = self.anchor() }
-            self.dirty = true
-            self.view.setNeedsLayout()
+            guard !self.userScrolling else { return }
+            self.applyMeasuredHeights()
         }
+    }
+
+    private func applyMeasuredHeights() {
+        let changes = measuredChanges
+        measuredChanges.removeAll()
+        let changed = changes.filter { id, height in
+            guard let entry = entries[id], !entry.needsMeasurement else { return false }
+            return abs(ceil(height) - entry.frame.height) > 1
+        }
+        guard !changed.isEmpty else { return }
+        if pendingAnchor == nil { pendingAnchor = anchor() }
+        for (id, height) in changed { entries[id]?.height = ceil(height) }
+        dirty = true
+        view.setNeedsLayout()
     }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -253,7 +294,15 @@ final class ReaderContinuousScrollController: UIViewController, UIScrollViewDele
         DispatchQueue.main.async { [weak self] in
             guard let self, self.callbacksGeneration == expected else { return }
             self.userScrolling = false
+            if let position = self.currentPosition() { self.model?.onSettled(position.chapter, position.permille) }
+            if let deferred = self.deferredModel { self.update(deferred) }
+            self.applyMeasuredHeights()
         }
+    }
+    private func currentPosition() -> (chapter: Int, permille: Int)? {
+        guard let anchor = anchor(), let entry = entries[anchor.id] else { return nil }
+        let extent = max(entry.frame.height - scroll.bounds.height, 1)
+        return (anchor.id, Int(min(max(anchor.localY / extent, 0), 1) * 1000))
     }
     private func queuePosition() {
         guard userScrolling, !publishQueued else { return }

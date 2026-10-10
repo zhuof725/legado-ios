@@ -1,5 +1,24 @@
 import SwiftUI
 
+private enum TypographyFixtures {
+    static let dialogue = "“春江花月夜，”他说，‘远处的山川——仍在风雨里……’玛丽·苏回答：“明天继续阅读。”"
+    static let paragraphs = [String(repeating: dialogue, count: 6), "“好。”", String(repeating: dialogue, count: 4)]
+}
+
+private struct TypographyScrollParagraphs: View {
+    let size: CGFloat
+    let spacing: CGFloat
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(TypographyFixtures.paragraphs.indices, id: \.self) { index in
+                InlineCommentParagraph(text: TypographyFixtures.paragraphs[index], count: 82,
+                    fontSize: size, lineSpacing: spacing, color: .black, onTap: {})
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }.padding(.horizontal, 20)
+    }
+}
+
 struct TypographyHarnessView: View {
     @StateObject private var settings = ReadSettings()
     @State private var showSettings = false
@@ -101,6 +120,69 @@ private enum TypographyInspection {
         return height
     }
 
+    private static func scrollHostReport() -> [String: Any] {
+        let controller = ReaderContinuousScrollController()
+        controller.update(ReaderContinuousScrollView(chapters: [ReaderScrollChapter(id: 0,
+            revision: "dialogue", content: AnyView(TypographyScrollParagraphs(size: 19, spacing: 8)))],
+            request: nil, layoutID: "dialogue", background: .white,
+            onPosition: { _, _ in }, onApproachEdge: { _ in }))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 391, height: 700))
+        window.rootViewController = controller
+        window.isHidden = false
+        defer { window.isHidden = true; window.rootViewController = nil }
+        var widthError: CGFloat = 0, gridError: CGFloat = 0, heightError: CGFloat = 0
+        var glyphs = 0, paragraphs = 0
+        var sourceOK = true, bubbleOK = true
+        let measurer = ReaderTextLayout.Measurer()
+        func descendants(_ root: UIView) -> [CommentTextView] {
+            (root as? CommentTextView).map { [$0] } ?? root.subviews.flatMap { descendants($0) }
+        }
+        // 宽度变化和长短段都经过生产 UIScrollView + UIHostingController，不能只检查离屏测量器。
+        for width in [CGFloat(391), 373.5] {
+            window.frame.size.width = width
+            controller.view.frame = window.bounds
+            for _ in 0..<3 {
+                controller.view.setNeedsLayout()
+                controller.view.layoutIfNeeded()
+                controller.children.forEach { $0.view.layoutIfNeeded() }
+            }
+            let views = descendants(controller.view)
+            let expectedWidth = width - 40
+            let grid = ReaderTextLayout.metrics(fontSize: 19, width: expectedWidth)
+            let origins = views.map { $0.convert(CGPoint.zero, to: controller.view).x }
+            if let first = origins.first {
+                for x in origins { widthError = max(widthError, abs(x - first)) }
+            }
+            for view in views {
+                paragraphs += 1
+                widthError = max(widthError, abs(view.bounds.width - expectedWidth),
+                                 abs(view.renderedWidth - expectedWidth), abs(view.textContainer.size.width - expectedWidth))
+                guard let text = TypographyFixtures.paragraphs.first(where: { view.textStorage.string == $0 + " \u{FFFC}" }) else {
+                    sourceOK = false
+                    continue
+                }
+                heightError = max(heightError, abs(view.bounds.height - measurer.height(text: text, count: 82,
+                    width: expectedWidth, fontSize: 19, lineSpacing: 8)))
+                let manager = view.layoutManager
+                for row in lines(view) {
+                    for glyph in row.glyphs.location..<NSMaxRange(row.glyphs) {
+                        if manager.characterIndexForGlyph(at: glyph) >= (text as NSString).length { continue }
+                        let x = row.rect.minX + manager.location(forGlyphAt: glyph).x
+                        gridError = max(gridError, abs(x - (x / grid.cellWidth).rounded() * grid.cellWidth))
+                        glyphs += 1
+                    }
+                }
+                if let bubble = view.bubbleRect {
+                    bubbleOK = bubbleOK && view.isBubble(at: CGPoint(x: bubble.midX, y: bubble.midY))
+                        && !view.isBubble(at: CGPoint(x: bubble.maxX + 2, y: bubble.midY))
+                } else { bubbleOK = false }
+            }
+        }
+        return ["scrollWidthError": Double(widthError), "scrollGridError": Double(gridError),
+                "scrollHeightError": Double(heightError), "scrollParagraphs": paragraphs,
+                "scrollGlyphs": glyphs, "scrollSourceOK": sourceOK, "scrollBubbleOK": bubbleOK]
+    }
+
     static func snapshot() -> String {
         precondition(Thread.isMainThread)
         let view = ReaderTextLayout.makeTextView()
@@ -113,7 +195,7 @@ private enum TypographyInspection {
         var bubbleOK = true, nativeRuns = true
         var worstBaseline: [String: Any] = [:]
         let han = String(repeating: "春江花月夜山川风雨天", count: 12)
-        let punctuation = String(repeating: "春江，花月。山川；风雨！天地？「阅读」《原文》", count: 8)
+        let punctuation = String(repeating: "春江，花月。山川；风雨！天地？「阅读」《原文》" + TypographyFixtures.dialogue, count: 8)
 
         for size in [CGFloat(12), 19, 36] {
             for width in [CGFloat(241), 333.5, 351] {
@@ -215,7 +297,7 @@ private enum TypographyInspection {
         }
 
         // 西文/emoji 的实际字形数量和横向位置与无字格的系统字体布局比较，而非只查 kern 属性。
-        let latin = "AVATAR office ffi café e\u{301} 👨‍👩‍👧‍👦"
+        let latin = "“AVATAR” ‘office’ don’t — ffi… café·e\u{301} 👨‍👩‍👧‍👦"
         _ = layout(view, text: latin, width: 700, size: 19, spacing: 8, continuation: true)
         let reference = ReaderTextLayout.makeTextView()
         ReaderTextLayout.configure(reference)
@@ -235,7 +317,7 @@ private enum TypographyInspection {
         var config = ReaderPaginator.Configuration(pageSize: CGSize(width: 391, height: 380),
                                                    fontSize: 19, lineSpacing: 8)
         config.chapterTitle = "完整章节标题，不占正文的固定行距"
-        let source = String(repeating: "原文标点，分页偏移。AVATAR👨‍👩‍👧‍👦e\u{301}", count: 24)
+        let source = String(repeating: TypographyFixtures.dialogue + "原文标点，分页偏移。AVATAR👨‍👩‍👧‍👦e\u{301}", count: 12)
         let pages = ReaderPaginator.paginate([
             .paragraph(text: source, commentCount: 82, commentURL: "https://example.invalid/comments"),
             .paragraph(text: "短尾段", commentCount: 0, commentURL: nil)
@@ -261,7 +343,7 @@ private enum TypographyInspection {
             let capacity = pageIndex == 0 ? config.firstPageBodyHeight : config.bodyHeight
             pageOverflow = max(pageOverflow, used - capacity)
         }
-        let report: [String: Any] = [
+        var report: [String: Any] = [
             "gridError": Double(gridError), "stepError": Double(stepError), "indentError": Double(indentError),
             "baselineError": Double(baselineError), "heightError": Double(heightError), "clipping": Double(clipping),
             "edgeError": Double(edgeError), "tailError": Double(tailError), "widthError": Double(widthError),
@@ -272,6 +354,7 @@ private enum TypographyInspection {
             "sourceOK": reconstructed == source + "短尾段", "continuations": continuationCount,
             "commentCount": commentCount, "pages": pages.count, "worstBaseline": worstBaseline
         ]
+        report.merge(scrollHostReport()) { _, new in new }
         guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8) else { return "invalid" }
         return json

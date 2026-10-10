@@ -278,7 +278,10 @@ final class CommentTextView: UITextView, UIGestureRecognizerDelegate {
         // UITextView 可能临时使用另一宽度进行试排。恢复本次字号/字格对应的容器，
         // 避免屏幕上和段评命中区域仍沿用前一次试排宽度。
         if renderedWidth > 0 { textContainer.size.width = renderedWidth }
-        return fitted
+        // UIKit/SwiftUI 的滚动宿主必须保留同一提议宽度；短段落的 usedRect 不是正文列宽。
+        // 这里只改返回尺寸，重复 layoutSubviews 仍由 typeset 的内容/宽度缓存拦截。
+        return CGSize(width: size.width.isFinite && size.width > 0 ? size.width : fitted.width,
+                      height: fitted.height)
     }
 
     override func layoutSubviews() {

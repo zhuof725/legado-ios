@@ -20,6 +20,14 @@ final class TypographyTests: XCTestCase {
         for key in ["gridError", "stepError", "indentError", "edgeError", "tailError", "widthError"] {
             XCTAssertLessThanOrEqual(try number(key), 0.25, "\(key): \(metrics.label)")
         }
+        for key in ["scrollWidthError", "scrollGridError"] {
+            XCTAssertLessThanOrEqual(try number(key), 0.25, metrics.label)
+        }
+        XCTAssertLessThanOrEqual(try number("scrollHeightError"), 0.5, metrics.label)
+        XCTAssertEqual(try number("scrollParagraphs"), 6, metrics.label)
+        XCTAssertGreaterThan(try number("scrollGlyphs"), 100, metrics.label)
+        XCTAssertEqual(report["scrollSourceOK"] as? Bool, true, metrics.label)
+        XCTAssertEqual(report["scrollBubbleOK"] as? Bool, true, metrics.label)
         XCTAssertGreaterThan(try number("gridGlyphs"), 1000)
         // 三档字号、三档宽度、0/8/30 行间距，Latin、emoji、气泡不能使某行忽高忽低。
         XCTAssertLessThanOrEqual(try number("baselineError"), 0.5, metrics.label)

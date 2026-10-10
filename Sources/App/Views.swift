@@ -148,12 +148,36 @@ private struct PreparedReaderChapter {
     let configuration: ReaderPaginator.Configuration
 }
 
+private enum ReaderChapterParser {
+    static func content(raw: String, isVolume: Bool) -> (text: String, blocks: [ContentBlock]) {
+        if isVolume { return (raw, []) }
+        let parsed = ContentBlocks.parse(raw)
+        let hasRich = parsed.contains { if case .paragraph(_, let c, _) = $0 { return c > 0 }; if case .paragraph = $0 { return false }; return true }
+        if hasRich { return ("", parsed) }
+        let clean = WebBook.cleanText(raw)
+        return (clean.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "（本章没有内容）" : clean, [])
+    }
+}
+
 private struct ScrollReaderChapter: Identifiable {
     let id: Int
     let revision = UUID().uuidString
     let text: String
     let blocks: [ContentBlock]
-    var readingBlocks: [ContentBlock] { blocks.isEmpty ? Paginator.blocks(fromPlain: text) : blocks }
+    let readingBlocks: [ContentBlock]
+
+    init(id: Int, text: String, blocks: [ContentBlock]) {
+        self.id = id
+        self.text = text
+        self.blocks = blocks
+        readingBlocks = blocks.isEmpty ? Paginator.blocks(fromPlain: text) : blocks
+    }
+}
+
+/// 滚动逐帧只更新轻量缓冲，不发布 SwiftUI 状态、不重建全部章节，也不写磁盘。
+private final class ReaderScrollProgress {
+    var chapter = 0
+    var position = 0
 }
 
 struct ReaderView: View {
@@ -189,7 +213,7 @@ struct ReaderView: View {
     @State private var scrollTasks: [Int: Task<Void, Never>] = [:]
     @State private var scrollGeneration = UUID()
     @State private var scrollErrors: [Int: String] = [:]
-    @State private var scrollPosition = 0
+    @State private var scrollProgress = ReaderScrollProgress()
     @Environment(\.scenePhase) private var scenePhase
     @State private var loading = true
     @State private var error: String?
@@ -351,7 +375,9 @@ struct ReaderView: View {
             }
         }
         .sheet(item: $commentURL) { link in CommentSheet(url: link) }
-        .onChange(of: scenePhase) { phase in if phase != .active { store.flushProgress() } }
+        .onChange(of: scenePhase) { phase in
+            if phase != .active { persistContinuousProgress(); store.flushProgress() }
+        }
         .onChange(of: settings.fontSize) { _ in repaginate() }
         .onChange(of: settings.lineSpacing) { _ in repaginate() }
         .onChange(of: settings.paragraphSpacing) { _ in repaginate() }
@@ -363,9 +389,10 @@ struct ReaderView: View {
             pendingEdge = nil
             pendingChapterDirection = 0
             if mode == 1 {
+                persistContinuousProgress()
                 cancelScrollLoads()
                 scrollChapters.removeAll()
-                pendingLanding = .saved(scrollPosition)
+                pendingLanding = .saved(scrollProgress.position)
                 repaginate(keepOffset: 0)
             } else {
                 cancelPreparation()
@@ -376,6 +403,7 @@ struct ReaderView: View {
         .onChange(of: screenSize) { _ in repaginate() }
         .onChange(of: pageInsets) { _ in repaginate() }
         .onDisappear {
+            persistContinuousProgress()
             cancelScrollLoads()
             cancelPreparation()
             preparedChapters.removeAll()
@@ -450,17 +478,26 @@ struct ReaderView: View {
         } else {
             ReaderContinuousScrollView(chapters: scrollChapters.map { chapter in
                 ReaderScrollChapter(id: chapter.id, revision: chapter.revision,
-                                    content: AnyView(scrollChapterBody(chapter)))
+                                    content: AnyView(scrollChapterBody(chapter)),
+                                    appearanceID: "\(settings.theme)-\(scrollBoundaryRevision(for: chapter.id))")
             }, request: scrollRequest,
-                layoutID: "\(settings.typographyValues)-\(settings.theme)-\(scrollBoundaryRevision)",
+                layoutID: "\(settings.typographyValues)",
                 background: UIColor(theme.bg),
                 onPosition: { chapter, position in recordContinuousPosition(chapter, position: position) },
-                onApproachEdge: { direction in loadScrollNeighbor(direction) })
+                onApproachEdge: { direction in loadScrollNeighbor(direction) },
+                onSettled: { chapter, position in
+                    recordContinuousPosition(chapter, position: position)
+                    persistContinuousProgress()
+                })
         }
     }
 
-    private var scrollBoundaryRevision: String {
-        "\(scrollChapters.first?.id ?? -1)-\(scrollChapters.last?.id ?? -1)-\(scrollTasks.keys.sorted())-\(scrollErrors.keys.sorted())"
+    private func scrollBoundaryRevision(for chapter: Int) -> String {
+        let directions = [-1, 1].filter { ($0 < 0 ? scrollChapters.first?.id : scrollChapters.last?.id) == chapter }
+        return directions.map { direction in
+            guard let target = scrollNeighbor(direction) else { return "\(direction):end" }
+            return "\(direction):\(target):\(scrollTasks[target] != nil):\(scrollErrors[target] ?? "")"
+        }.joined(separator: "|")
     }
 
     private func scrollChapterBody(_ content: ScrollReaderChapter) -> some View {
@@ -531,7 +568,8 @@ struct ReaderView: View {
         case .end: position = 1000
         case .saved(let value): position = value
         }
-        scrollPosition = position
+        scrollProgress.chapter = index
+        scrollProgress.position = position
         scrollRequest = ReaderScrollRequest(id: UUID(), chapter: index, permille: position)
         loadScrollNeighbor(1)
         loadScrollNeighbor(-1)
@@ -552,8 +590,13 @@ struct ReaderView: View {
                 try Task.checkCancellation()
                 guard scrollGeneration == generation, settings.pageMode == 0,
                       scrollNeighbor(direction) == target else { return }
-                let parsed = Self.readingContent(raw: raw, isVolume: chapters[target].isVolume)
-                let chapter = ScrollReaderChapter(id: target, text: parsed.text, blocks: parsed.blocks)
+                let isVolume = chapters[target].isVolume
+                let chapter = await Task.detached(priority: .utility) {
+                    let parsed = ReaderChapterParser.content(raw: raw, isVolume: isVolume)
+                    return ScrollReaderChapter(id: target, text: parsed.text, blocks: parsed.blocks)
+                }.value
+                try Task.checkCancellation()
+                guard scrollGeneration == generation, scrollNeighbor(direction) == target else { return }
                 if direction > 0 { scrollChapters.append(chapter) }
                 else { scrollChapters.insert(chapter, at: 0) }
                 trimScrollChapters()
@@ -574,20 +617,25 @@ struct ReaderView: View {
 
     private func recordContinuousPosition(_ chapter: Int, position: Int) {
         guard settings.pageMode == 0, !loading, !showToc, !showSettings, commentURL == nil,
-              let content = scrollChapters.first(where: { $0.id == chapter }) else { return }
-        scrollPosition = position
+              scrollChapters.contains(where: { $0.id == chapter }) else { return }
+        scrollProgress.chapter = chapter
+        scrollProgress.position = position
+    }
+
+    private func persistContinuousProgress() {
+        guard !loading, let content = scrollChapters.first(where: { $0.id == scrollProgress.chapter }) else { return }
+        let chapter = content.id
         if index != chapter {
             index = chapter
             text = content.text
             blocks = content.blocks
             store.updateProgress(book, index: chapter, title: chapters[chapter].title)
             trimScrollChapters()
-            // 下一章已在同一画布中，进入它只更新阅读进度，不触发目录导航/页面替换。
             loadScrollNeighbor(1)
             loadScrollNeighbor(-1)
             if let source = store.source(for: book.origin) { prefetch(source) }
         }
-        store.updateScrollPosition(book, permille: position)
+        store.updateScrollPosition(book, permille: scrollProgress.position)
     }
 
     // MARK: 翻页模式
@@ -679,7 +727,7 @@ struct ReaderView: View {
                         content = (existing.text, existing.blocks)
                     } else {
                         let raw = try await rawContent(at: target, priority: .utility)
-                        content = Self.readingContent(raw: raw, isVolume: chapters[target].isVolume)
+                        content = ReaderChapterParser.content(raw: raw, isVolume: chapters[target].isVolume)
                     }
                     try Task.checkCancellation()
                     guard preparationID == token, index == center,
@@ -990,18 +1038,9 @@ struct ReaderView: View {
                                                        nextChapterURL: next, priority: priority)
     }
 
-    private static func readingContent(raw: String, isVolume: Bool) -> (text: String, blocks: [ContentBlock]) {
-        if isVolume { return (raw, []) }
-        let parsed = ContentBlocks.parse(raw)
-        let hasRich = parsed.contains { if case .paragraph(_, let c, _) = $0 { return c > 0 }; if case .paragraph = $0 { return false }; return true }
-        if hasRich { return ("", parsed) }
-        let clean = WebBook.cleanText(raw)
-        return (clean.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "（本章没有内容）" : clean, [])
-    }
-
     /// 前台与预排版使用同一解析流程，保留原始段评标记和续段字符偏移。
     private func show(raw: String, landing: ChapterLanding) {
-        let content = Self.readingContent(raw: raw, isVolume: currentVolume != nil)
+        let content = ReaderChapterParser.content(raw: raw, isVolume: currentVolume != nil)
         text = content.text
         blocks = content.blocks
         pages = []

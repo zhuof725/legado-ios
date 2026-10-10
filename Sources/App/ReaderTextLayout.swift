@@ -12,6 +12,7 @@ enum ReaderTextLayout {
         let tracking: CGFloat
         let lineHeight: CGFloat
         let baseline: CGFloat
+        fileprivate let punctuationAdvances: [UInt32: CGFloat]
     }
 
     private struct Fonts {
@@ -20,7 +21,18 @@ enum ReaderTextLayout {
         let advance: CGFloat
         let ascent: CGFloat
         let descent: CGFloat
+        let punctuationAdvances: [UInt32: CGFloat]
     }
+
+    // 这些 Unicode 标点也用于西文，只在相邻 CJK 上下文中占一格。
+    private static let contextualPunctuation: [UInt32] = [0x00B7, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D, 0x2026]
+
+    private static func advance(of text: String, font: UIFont) -> CGFloat {
+        // 量 feature 生效后的字形，不能把引号一律当作半角再补半格：fwid 可能已给它一整格。
+        let sample = NSAttributedString(string: text, attributes: [.font: font, .kern: 0, .ligature: 0])
+        return CGFloat(CTLineGetTypographicBounds(CTLineCreateWithAttributedString(sample), nil, nil, nil))
+    }
+
     // UIKit 排版入口均在主线程；分页二分测量不重复解析字体。
     private static var fontCache: [CGFloat: Fonts] = [:]
 
@@ -48,9 +60,12 @@ enum ReaderTextLayout {
                              max(emoji.ascender, bubbleSize + tail * 0.5 + 2))
             let descent = max(max(-body.descender, -fullWidth.descender),
                               max(-emoji.descender, tail * 0.5))
+            let punctuationAdvances = Dictionary(uniqueKeysWithValues: contextualPunctuation.map {
+                ($0, advance(of: String(UnicodeScalar($0)!), font: fullWidth))
+            })
             fonts = Fonts(body: body, cjk: fullWidth,
-                          advance: max(("汉" as NSString).size(withAttributes: [.font: fullWidth]).width, 1),
-                          ascent: ascent, descent: descent)
+                          advance: max(advance(of: "汉", font: fullWidth), 1),
+                          ascent: ascent, descent: descent, punctuationAdvances: punctuationAdvances)
             fontCache[size] = fonts
         }
         let available = width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
@@ -59,13 +74,13 @@ enum ReaderTextLayout {
         let height = ceil(fonts.ascent + fonts.descent)
         return Metrics(font: fonts.body, cjkFont: fonts.cjk, cellWidth: cell,
                        tracking: cell - fonts.advance, lineHeight: height,
-                       baseline: fonts.ascent + (height - fonts.ascent - fonts.descent) * 0.5)
+                       baseline: fonts.ascent + (height - fonts.ascent - fonts.descent) * 0.5,
+                       punctuationAdvances: fonts.punctuationAdvances)
     }
 
-    /// 只给单标量的全宽 CJK 字符加字距；组合字符、变体选择符、ZWJ 和 Latin run 不拆开。
-    private static func isGridCharacter(_ character: Character) -> Bool {
-        guard character.unicodeScalars.count == 1, let scalar = character.unicodeScalars.first else { return false }
-        switch scalar.value {
+    /// 只给单标量字符加字距；组合字符、变体选择符、ZWJ 和 Latin run 不拆开。
+    private static func isGridScalar(_ scalar: UInt32) -> Bool {
+        switch scalar {
         case 0x2E80...0x303F, 0x3040...0x30FF, 0x3100...0x312F, 0x31A0...0x31BF,
              0x31F0...0x31FF, 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF,
              0xFE10...0xFE1F, 0xFE30...0xFE4F, 0xFF01...0xFF60, 0xFFE0...0xFFE6,
@@ -102,21 +117,51 @@ enum ReaderTextLayout {
         ]
         let result = NSMutableAttributedString(string: text, attributes: attrs)
         var offset = 0
-        var runStart: Int?
+        var runStart = 0, runEnd = 0
+        var runKern: CGFloat?
         func finishRun() {
-            guard let start = runStart else { return }
-            result.addAttributes([.font: grid.cjkFont, .kern: grid.tracking],
-                                 range: NSRange(location: start, length: offset - start))
-            runStart = nil
+            guard let kern = runKern else { return }
+            // 明确的 advance + kern 组成一格；只关闭字格 run 的连字/自动 kerning。
+            result.addAttributes([.font: grid.cjkFont, .kern: kern, .ligature: 0],
+                                 range: NSRange(location: runStart, length: runEnd - runStart))
+            runKern = nil
         }
-        for character in text {
-            if isGridCharacter(character) {
-                if runStart == nil { runStart = offset }
-            } else {
+        func appendGrid(start: Int, length: Int, kern: CGFloat) {
+            if runKern != kern || runEnd != start {
+                finishRun()
+                runStart = start
+                runKern = kern
+            }
+            runEnd = start + length
+        }
+        var pending: [(start: Int, length: Int, kern: CGFloat)] = []
+        var leftIsGrid = false
+        func resolvePunctuation(rightIsGrid: Bool) {
+            // 只查看紧邻的非候选字符；不跨越空格/西文/emoji，把英文引号和 don't 留给原生塑形。
+            if leftIsGrid || rightIsGrid {
+                for mark in pending { appendGrid(start: mark.start, length: mark.length, kern: mark.kern) }
+            } else if !pending.isEmpty {
                 finishRun()
             }
-            offset += String(character).utf16.count
+            pending.removeAll(keepingCapacity: true)
         }
+        for character in text {
+            let scalar = character.unicodeScalars.count == 1 ? character.unicodeScalars.first?.value : nil
+            let length = scalar.map { $0 > 0xFFFF ? 2 : 1 } ?? String(character).utf16.count
+            if let scalar, isGridScalar(scalar) {
+                resolvePunctuation(rightIsGrid: true)
+                appendGrid(start: offset, length: length, kern: grid.tracking)
+                leftIsGrid = true
+            } else if let scalar, let advance = grid.punctuationAdvances[scalar] {
+                pending.append((offset, length, grid.cellWidth - advance))
+            } else {
+                resolvePunctuation(rightIsGrid: false)
+                finishRun()
+                leftIsGrid = false
+            }
+            offset += length
+        }
+        resolvePunctuation(rightIsGrid: false)
         finishRun()
         if count > 0 {
             result.append(NSAttributedString(string: " ", attributes: attrs))
