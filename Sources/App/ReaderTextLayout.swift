@@ -105,8 +105,8 @@ enum ReaderTextLayout {
         style.maximumLineHeight = grid.lineHeight
         // 段间距和标题仍由外层布局计算；不把最后一行/章尾撑满。
         style.paragraphSpacing = 0
-        // 整字格段落保持固定列。只有压缩引号打破整格节奏的段落才让
-        // TextKit 平衡非末行余量；它仍负责避头尾，且不会拉伸段末行。
+        // TextKit 先按整字格及紧凑标点确定合法断行。
+        // 行片段确定后再平衡汉字间余量，标点和段末行保持原来的间隔。
         style.alignment = .left
         style.lineBreakMode = .byWordWrapping
         style.hyphenationFactor = 0
@@ -175,7 +175,6 @@ enum ReaderTextLayout {
         for index in 0..<source.length {
             guard let scalar = UnicodeScalar(source.character(at: index)), quotes.contains(scalar),
                   result.attribute(.kern, at: index, effectiveRange: nil) != nil else { continue }
-            style.alignment = .justified
             result.addAttributes([.font: grid.font, .kern: 0, .ligature: 0],
                                  range: NSRange(location: index, length: 1))
             if "’”".unicodeScalars.contains(scalar), index > 0,
@@ -272,6 +271,50 @@ enum ReaderTextLayout {
 /// NSLayoutManager.delegate 是弱引用，静态实例确保渲染器/分页器始终使用同一规则。
 private final class ReaderLineMetrics: NSObject, NSLayoutManagerDelegate {
     static let shared = ReaderLineMetrics()
+
+    func layoutManager(_ manager: NSLayoutManager, didCompleteLayoutFor container: NSTextContainer?,
+                       atEnd layoutFinishedFlag: Bool) {
+        guard let container, let storage = manager.textStorage else { return }
+        let source = storage.string as NSString
+        // No compressed CJK quote means the original integer-column layout is unchanged.
+        guard source.rangeOfCharacter(from: CharacterSet(charactersIn: "‘’“”")).location != NSNotFound else { return }
+        var rows: [(CGRect, CGRect, NSRange)] = []
+        manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(for: container)) {
+            rect, used, _, glyphs, _ in rows.append((rect, used, glyphs))
+        }
+        for (rect, used, range) in rows.dropLast() {
+            let chars = manager.characterRange(forGlyphRange: range, actualGlyphRange: nil)
+            guard NSMaxRange(chars) < source.length,
+                  !CharacterSet.newlines.contains(UnicodeScalar(source.character(at: NSMaxRange(chars) - 1))!) else { continue }
+            let remainder = rect.maxX - used.maxX
+            guard remainder > 0.25 else { continue }
+            var boundaries: Set<Int> = []
+            for glyph in (range.location + 1)..<NSMaxRange(range) {
+                let previous = manager.characterIndexForGlyph(at: glyph - 1)
+                let current = manager.characterIndexForGlyph(at: glyph)
+                // Restrict expansion to adjacent BMP Han: never split shaping runs,
+                // marks, punctuation, emoji, surrogate pairs or the comment attachment.
+                if (0x4E00...0x9FFF).contains(Int(source.character(at: previous))),
+                   (0x4E00...0x9FFF).contains(Int(source.character(at: current))) {
+                    boundaries.insert(glyph)
+                }
+            }
+            guard !boundaries.isEmpty else { continue }
+            let extra = remainder / CGFloat(boundaries.count)
+            // Capture all original glyph locations before changing any run boundary.
+            let positions = (range.location..<NSMaxRange(range)).map { manager.location(forGlyphAt: $0) }
+            var shift: CGFloat = 0
+            for (offset, original) in positions.enumerated() {
+                let glyph = range.location + offset
+                if boundaries.contains(glyph) { shift += extra }
+                manager.setLocation(CGPoint(x: original.x + shift, y: original.y),
+                                    forStartOfGlyphRange: NSRange(location: glyph, length: 1))
+            }
+            var filled = used
+            filled.size.width += remainder
+            manager.setLineFragmentRect(rect, forGlyphRange: range, usedRect: filled)
+        }
+    }
 
     func layoutManager(_ layoutManager: NSLayoutManager,
                        shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<CGRect>,

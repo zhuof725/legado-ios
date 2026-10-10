@@ -174,6 +174,7 @@ private enum TypographyInspection {
                     width: expectedWidth, fontSize: 19, lineSpacing: 8)))
                 let manager = view.layoutManager
                 for row in lines(view) {
+                    var hanStep: CGFloat?
                     for glyph in row.glyphs.location..<NSMaxRange(row.glyphs) {
                         if manager.characterIndexForGlyph(at: glyph) >= (text as NSString).length { continue }
                         let x = row.rect.minX + manager.location(forGlyphAt: glyph).x
@@ -184,8 +185,9 @@ private enum TypographyInspection {
                         if glyph > row.glyphs.location, ci > 0,
                            (0x4E00...0x9FFF).contains(Int(ns.character(at: ci))),
                            (0x4E00...0x9FFF).contains(Int(ns.character(at: ci - 1))) {
-                            gridError = max(gridError, abs(x - row.rect.minX
-                                - manager.location(forGlyphAt: glyph - 1).x - grid.cellWidth))
+                            let step = x - row.rect.minX - manager.location(forGlyphAt: glyph - 1).x
+                            gridError = max(gridError, abs(step - (hanStep ?? step)))
+                            hanStep = step
                         }
                         glyphs += 1
                     }
@@ -509,6 +511,7 @@ private enum TypographyInspection {
                         }
                         for (rowIndex, row) in rows.enumerated() {
                             var previous: CGFloat?
+                            var hanStep: CGFloat?
                             for glyph in row.glyphs.location..<NSMaxRange(row.glyphs) {
                                 let x = row.rect.minX + view.layoutManager.location(forGlyphAt: glyph).x
                                 if text == han {
@@ -526,6 +529,16 @@ private enum TypographyInspection {
                                     } else if "，。、；：！？".contains(mark), ci + 1 < ns.length,
                                               "’”".contains(ns.substring(with: NSRange(location: ci + 1, length: 1))) {
                                         expected -= grid.cellWidth * 0.5
+                                    }
+                                    let next = manager.characterIndexForGlyph(at: glyph)
+                                    let adjacentHan = (0x4E00...0x9FFF).contains(Int(ns.character(at: ci)))
+                                        && (0x4E00...0x9FFF).contains(Int(ns.character(at: next)))
+                                    if text != han && adjacentHan {
+                                        // Mixed rows have one uniform Han step; optical punctuation
+                                        // still has its original measured advance, checked below.
+                                        let step = x - previous
+                                        expected = hanStep ?? step
+                                        hanStep = step
                                     }
                                     stepError = max(stepError, abs(x - previous - expected))
                                 }
