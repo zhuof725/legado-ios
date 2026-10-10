@@ -1,0 +1,296 @@
+import SwiftUI
+import UIKit
+
+struct ReaderScrollChapter {
+    let id: Int
+    let revision: String
+    let content: AnyView
+}
+
+struct ReaderScrollRequest: Equatable {
+    let id: UUID
+    let chapter: Int
+    let permille: Int
+}
+
+/// 所有已加载章节共享一个 UIScrollView。追加/前插只改内容范围，不重新创建滚动视图。
+struct ReaderContinuousScrollView: UIViewControllerRepresentable {
+    let chapters: [ReaderScrollChapter]
+    let request: ReaderScrollRequest?
+    let layoutID: String
+    let background: UIColor
+    let onPosition: (_ chapter: Int, _ permille: Int) -> Void
+    let onApproachEdge: (_ direction: Int) -> Void
+
+    func makeUIViewController(context: Context) -> ReaderContinuousScrollController {
+        let controller = ReaderContinuousScrollController()
+        controller.update(self)
+        return controller
+    }
+    func updateUIViewController(_ controller: ReaderContinuousScrollController, context: Context) {
+        controller.update(self)
+    }
+}
+
+private struct ScrollChapterHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct MeasuredScrollChapter: View {
+    let content: AnyView
+    let onHeight: (CGFloat) -> Void
+    var body: some View {
+        content.frame(maxWidth: .infinity, alignment: .topLeading)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: ScrollChapterHeightKey.self, value: geometry.size.height)
+            })
+            .onPreferenceChange(ScrollChapterHeightKey.self, perform: onHeight)
+    }
+}
+
+final class ReaderContinuousScrollController: UIViewController, UIScrollViewDelegate {
+    private final class Entry {
+        let host: UIHostingController<AnyView>
+        var revision: String
+        var frame = CGRect.zero
+        init(host: UIHostingController<AnyView>, revision: String) {
+            self.host = host
+            self.revision = revision
+        }
+    }
+    private struct Anchor {
+        let id: Int
+        let localY: CGFloat
+        let fraction: CGFloat
+    }
+    private let scroll = UIScrollView()
+    private var model: ReaderContinuousScrollView?
+    private var entries: [Int: Entry] = [:]
+    private var order: [Int] = []
+    private var layoutID = ""
+    private var dirty = true
+    private var layingOut = false
+    private var pendingAnchor: Anchor?
+    private var reflow = false
+    private var lastSize = CGSize.zero
+    private var appliedRequest: UUID?
+    private var userScrolling = false
+    private var publishQueued = false
+    private var callbacksGeneration = UUID()
+    private var lastPosition: String?
+    private var edgeSent: [Int: Int] = [:]
+    private var measuredChanges: [Int: CGFloat] = [:]
+    private var heightUpdateQueued = false
+
+    override func loadView() {
+        view = UIView()
+        scroll.delegate = self
+        scroll.showsVerticalScrollIndicator = false
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.alwaysBounceVertical = true
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.accessibilityIdentifier = "continuous-reader-scroll"
+        view.addSubview(scroll)
+    }
+
+    func update(_ next: ReaderContinuousScrollView) {
+        loadViewIfNeeded()
+        let old = model
+        let ids = next.chapters.map { $0.id }
+        let changed = ids != order || next.layoutID != layoutID
+            || next.chapters.contains { entries[$0.id]?.revision != $0.revision }
+        let newRequest = next.request?.id != old?.request?.id
+        if changed && pendingAnchor == nil { pendingAnchor = anchor() }
+        reflow = reflow || next.layoutID != layoutID
+        model = next
+        view.backgroundColor = next.background
+        scroll.backgroundColor = next.background
+        if newRequest {
+            callbacksGeneration = UUID()
+            userScrolling = false
+            lastPosition = nil
+        }
+        if changed {
+            let kept = Set(ids)
+            for (id, entry) in entries where !kept.contains(id) {
+                entry.host.willMove(toParent: nil)
+                entry.host.view.removeFromSuperview()
+                entry.host.removeFromParent()
+                entries[id] = nil
+            }
+            for chapter in next.chapters {
+                let root = AnyView(MeasuredScrollChapter(content: chapter.content) { [weak self] height in
+                    self?.heightChanged(chapter.id, revision: chapter.revision, height: height)
+                })
+                if let entry = entries[chapter.id] {
+                    if entry.revision != chapter.revision || layoutID != next.layoutID {
+                        entry.revision = chapter.revision
+                        entry.host.rootView = root
+                    }
+                } else {
+                    let host = UIHostingController(rootView: root)
+                    if #available(iOS 16.4, *) { host.safeAreaRegions = [] }
+                    addChild(host)
+                    scroll.addSubview(host.view)
+                    host.didMove(toParent: self)
+                    entries[chapter.id] = Entry(host: host, revision: chapter.revision)
+                }
+                entries[chapter.id]?.host.view.backgroundColor = next.background
+            }
+            order = ids
+            layoutID = next.layoutID
+            dirty = true
+        }
+        if changed || newRequest { view.setNeedsLayout() }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard !layingOut, view.bounds.width > 0, view.bounds.height > 0 else { return }
+        let requestPending = model?.request.map { $0.id != appliedRequest && entries[$0.chapter] != nil } ?? false
+        guard dirty || view.bounds.size != lastSize || requestPending else { return }
+        if view.bounds.size != lastSize {
+            if pendingAnchor == nil { pendingAnchor = anchor() }
+            reflow = reflow || lastSize.width != view.bounds.width
+            dirty = true
+        }
+        layingOut = true
+        let saved = pendingAnchor ?? anchor()
+        scroll.frame = view.bounds
+        let size = scroll.bounds.size
+        if dirty {
+            var y: CGFloat = 0
+            for id in order {
+                guard let entry = entries[id] else { continue }
+                let height = max(ceil(entry.host.sizeThatFits(in: CGSize(width: size.width,
+                    height: CGFloat.greatestFiniteMagnitude)).height), 1)
+                entry.frame = CGRect(x: 0, y: y, width: size.width, height: height)
+                entry.host.view.frame = entry.frame
+                y += height
+            }
+            // 尾部留白只在短末章之后，不插在章节之间；保证该章可恢复到视口顶端。
+            let lastHeight = order.last.flatMap { entries[$0]?.frame.height } ?? size.height
+            scroll.contentSize = CGSize(width: size.width, height: y + max(size.height - lastHeight, 0))
+            dirty = false
+        }
+        var requested = false
+        if let request = model?.request, request.id != appliedRequest, let entry = entries[request.chapter] {
+            let extent = max(entry.frame.height - size.height, 0)
+            setOffset(entry.frame.minY + extent * CGFloat(min(max(request.permille, 0), 1000)) / 1000)
+            appliedRequest = request.id
+            requested = true
+            userScrolling = false
+        } else if let saved, let entry = entries[saved.id] {
+            let local = reflow ? saved.fraction * entry.frame.height : saved.localY
+            setOffset(entry.frame.minY + local)
+        }
+        pendingAnchor = nil
+        reflow = false
+        lastSize = size
+        layingOut = false
+        // layout / 请求定位不产生阅读进度；但可预读附近内容以填满屏幕。
+        checkEdges()
+        if !requested && userScrolling { queuePosition() }
+    }
+
+    private func setOffset(_ y: CGFloat) {
+        let value = min(max(y, 0), max(scroll.contentSize.height - scroll.bounds.height, 0))
+        guard abs(value - scroll.contentOffset.y) > 0.25 else { return }
+        // 插入/裁剪章节时只补偿内容原点，不改原生 pan / deceleration。
+        scroll.contentOffset = CGPoint(x: 0, y: value)
+    }
+
+    private func anchor() -> Anchor? {
+        let y = max(scroll.contentOffset.y, 0)
+        guard let id = order.first(where: { (entries[$0]?.frame.maxY ?? 0) > y + 0.5 }) ?? order.last,
+              let entry = entries[id], entry.frame.height > 0 else { return nil }
+        let local = max(y - entry.frame.minY, 0)
+        return Anchor(id: id, localY: local, fraction: local / entry.frame.height)
+    }
+
+    private func heightChanged(_ id: Int, revision: String, height: CGFloat) {
+        guard height.isFinite, height > 0, let entry = entries[id], entry.revision == revision,
+              abs(ceil(height) - entry.frame.height) > 1 else { return }
+        measuredChanges[id] = height
+        guard !heightUpdateQueued else { return }
+        heightUpdateQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.heightUpdateQueued = false
+            let changes = self.measuredChanges
+            self.measuredChanges.removeAll()
+            guard changes.contains(where: { id, height in
+                guard let entry = self.entries[id] else { return false }
+                return abs(ceil(height) - entry.frame.height) > 1
+            }) else { return }
+            if self.pendingAnchor == nil { self.pendingAnchor = self.anchor() }
+            self.dirty = true
+            self.view.setNeedsLayout()
+        }
+    }
+
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        userScrolling = true
+        callbacksGeneration = UUID()
+    }
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard !layingOut else { return }
+        if userScrolling { queuePosition() }
+        checkEdges()
+    }
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        queuePosition()
+        if !decelerate { finishUserScroll() }
+    }
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        queuePosition()
+        finishUserScroll()
+    }
+    private func finishUserScroll() {
+        let expected = callbacksGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.callbacksGeneration == expected else { return }
+            self.userScrolling = false
+        }
+    }
+    private func queuePosition() {
+        guard userScrolling, !publishQueued else { return }
+        publishQueued = true
+        let expected = callbacksGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.publishQueued = false
+            guard self.callbacksGeneration == expected, let anchor = self.anchor(),
+                  let entry = self.entries[anchor.id], let model = self.model else { return }
+            let extent = max(entry.frame.height - self.scroll.bounds.height, 1)
+            let position = Int(min(max(anchor.localY / extent, 0), 1) * 1000)
+            let key = "\(anchor.id):\(position)"
+            guard self.lastPosition != key else { return }
+            self.lastPosition = key
+            model.onPosition(anchor.id, position)
+        }
+    }
+
+    private func checkEdges() {
+        guard !layingOut, scroll.bounds.height > 0, !order.isEmpty, let model else { return }
+        if let request = model.request, appliedRequest != request.id { return }
+        let threshold = scroll.bounds.height
+        let y = max(scroll.contentOffset.y, 0)
+        for direction in [-1, 1] {
+            guard let id = direction > 0 ? order.last : order.first else { continue }
+            let near = direction > 0
+                ? scroll.contentSize.height - (y + scroll.bounds.height) <= threshold
+                : y <= threshold
+            if !near { edgeSent[direction] = nil; continue }
+            guard edgeSent[direction] != id else { continue }
+            edgeSent[direction] = id
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.edgeSent[direction] == id,
+                      (direction > 0 ? self.order.last : self.order.first) == id else { return }
+                self.model?.onApproachEdge(direction)
+            }
+        }
+    }
+}

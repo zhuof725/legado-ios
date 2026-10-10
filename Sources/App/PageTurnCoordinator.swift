@@ -78,7 +78,12 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         for (key, face) in fronts where valid(key) {
             face.updateContent(snapshots[key.contentID]!.pages[key.index], background: model.background)
         }
-        for back in backs.values { back.updateBackground(model.background) }
+        // ID/页数不变时正文与主题也可能刷新；纸背必须刷新逻辑前页，而非目的页。
+        for (key, back) in backs {
+            if let paper = step(key, -1), let snapshot = snapshots[paper.contentID] {
+                back.updateContent(snapshot.pages[paper.index], background: model.background)
+            }
+        }
         guard let snapshot = snapshots[model.contentID], !snapshot.pages.isEmpty else {
             exposeOnly(nil)
             finishContentUpdate()
@@ -123,7 +128,7 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
         order = chapters.map { $0.contentID }
         for (key, face) in fronts where !valid(key) { face.setAccessibilityVisible(false) }
         fronts = fronts.filter { valid($0.key) }
-        backs = backs.filter { valid($0.key) }
+        backs = backs.filter { valid($0.key) && step($0.key, -1) != nil }
     }
 
     private func valid(_ key: Key) -> Bool {
@@ -162,10 +167,15 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
     }
 
     /// B(n) 是 F(n) 之前那张纸的背面：F(n-1) ⇄ B(n) ⇄ F(n)。
-    private func back(before key: Key) -> ReaderPageBack {
-        if let cached = backs[key] { return cached }
+    private func back(before key: Key) -> ReaderPageBack? {
+        guard let paper = step(key, -1), let snapshot = snapshots[paper.contentID] else { return nil }
+        if let cached = backs[key] {
+            cached.prepareIfNeeded(size: vc?.view.bounds.size ?? .zero)
+            return cached
+        }
         let back = ReaderPageBack(before: key.index, contentID: key.contentID,
-                                  generation: key.generation, background: applied.background)
+                                  generation: key.generation, content: snapshot.pages[paper.index],
+                                  background: applied.background, size: vc?.view.bounds.size ?? .zero)
         backs[key] = back
         return back
     }
@@ -198,20 +208,24 @@ final class PageTurnCoordinator: NSObject, UIPageViewControllerDataSource, UIPag
 
     /// spine.min 的静态展示只接收一个正面；双面纸背仅在程序动画时传入。
     /// 交互翻页的纸背由 dataSource 提供，不把纸背算成可阅读的一页。
-    private func controllers(for target: Key, turningFrom outgoing: Key? = nil,
+    private func controllers(for target: Key, turningFrom outgoing: ReaderPageHost? = nil,
                              direction: UIPageViewController.NavigationDirection = .forward) -> [UIViewController]? {
         guard let face = front(target) else { return nil }
         guard applied.style == .curl, let outgoing else { return [face] }
         // 前进翻走旧纸；后退翻回目标纸。B(n) 是 F(n) 前一张纸的背面。
-        let paper = direction == .forward ? outgoing : target
-        if let following = step(paper, 1) { return [face, back(before: following)] }
-        return [face, ReaderPageBack(before: paper.index + 1, contentID: paper.contentID,
-            generation: paper.generation, background: applied.background)]
+        let paper = direction == .forward ? outgoing : face
+        if let paperKey = key(paper), let following = step(paperKey, 1), let back = back(before: following) {
+            return [face, back]
+        }
+        // 异步跨章回退时旧章可能已被 refreshSnapshots 淘汰；仍保留实际翻走的正文。
+        return [face, ReaderPageBack(before: paper.pageIndex + 1, contentID: paper.contentID,
+            generation: paper.generation, content: paper.rootView, background: applied.background,
+            size: vc?.view.bounds.size ?? paper.view.bounds.size)]
     }
 
     private func install(_ target: Key, direction: UIPageViewController.NavigationDirection,
                          animated: Bool, contentUpdate: Bool, chapterTurn: Bool) {
-        guard let vc, let pair = controllers(for: target, turningFrom: animated ? shown : nil,
+        guard let vc, let pair = controllers(for: target, turningFrom: animated ? visibleFront() : nil,
                                             direction: direction) else { finishContentUpdate(); return }
         let token = UUID()
         let origin = shown

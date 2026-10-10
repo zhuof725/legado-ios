@@ -148,6 +148,14 @@ private struct PreparedReaderChapter {
     let configuration: ReaderPaginator.Configuration
 }
 
+private struct ScrollReaderChapter: Identifiable {
+    let id: Int
+    let revision = UUID().uuidString
+    let text: String
+    let blocks: [ContentBlock]
+    var readingBlocks: [ContentBlock] { blocks.isEmpty ? Paginator.blocks(fromPlain: text) : blocks }
+}
+
 struct ReaderView: View {
     @EnvironmentObject var store: AppStore
     @EnvironmentObject var settings: ReadSettings
@@ -160,7 +168,6 @@ struct ReaderView: View {
     @State private var blocks: [ContentBlock] = []
     @State private var commentURL: URL?
     @State private var commentBusy = false
-    @State private var restorePermille: Int?
     @State private var pages: [BookPage] = []
     @State private var pageIndex = 0
     @State private var screenSize: CGSize = .zero
@@ -177,10 +184,12 @@ struct ReaderView: View {
     @State private var pendingLanding: ChapterLanding?
     @State private var retryTarget: Int?
     @State private var retryLanding: ChapterLanding = .start
-    @State private var scrollResetRevision = 0
-    @State private var scrollStartPending = false
-    @State private var contentHeight: CGFloat = 0
-    @State private var viewportHeight: CGFloat = 0
+    @State private var scrollChapters: [ScrollReaderChapter] = []
+    @State private var scrollRequest: ReaderScrollRequest?
+    @State private var scrollTasks: [Int: Task<Void, Never>] = [:]
+    @State private var scrollGeneration = UUID()
+    @State private var scrollErrors: [Int: String] = [:]
+    @State private var scrollPosition = 0
     @Environment(\.scenePhase) private var scenePhase
     @State private var loading = true
     @State private var error: String?
@@ -212,102 +221,7 @@ struct ReaderView: View {
             if settings.pageMode == 1 {
                 pagedBody
             } else {
-            ScrollViewReader { proxy in
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: CGFloat(settings.paragraphSpacing)) {
-                            Color.clear.frame(height: 1).id("top")
-                                .background(GeometryReader { g in
-                                    Color.clear.preference(key: ScrollOffsetKey.self, value: -g.frame(in: .named("reader")).minY)
-                                })
-                            if let volume = currentVolume {
-                                VolumeTitleView(title: volume.title, foreground: theme.fg)
-                                    .frame(minHeight: max(viewportHeight * 0.7, 240))
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { toggleBars() }
-                            } else {
-                                if !chapters.isEmpty, index < chapters.count {
-                                    ChapterTitleView(title: chapters[index].title,
-                                                     fontSize: CGFloat(settings.fontSize), color: UIColor(theme.fg))
-                                        .contentShape(Rectangle())
-                                        .onTapGesture { toggleBars() }
-                                }
-                                ForEach(Array(readingBlocks.enumerated()), id: \.offset) { _, block in
-                                    blockView(block)
-                                }
-                            }
-                            if loading { ProgressView().frame(maxWidth: .infinity) }
-                            if let e = error { Text(e).foregroundStyle(.red) }
-                            if !chapters.isEmpty {
-                                VStack(spacing: 8) {
-                                    HStack {
-                                        Button("上一章") { goAcrossEdge(-1) }.disabled(previousChapter == nil || loading)
-                                        Spacer()
-                                        Button("下一章") { goAcrossEdge(1) }.disabled(nextChapter == nil || loading)
-                                    }
-                                    Text(nextChapter == nil ? "已到最后一章" : "继续上滑，自动阅读下一章")
-                                        .font(.caption).foregroundStyle(theme.fg.opacity(0.5))
-                                }
-                                .padding(.vertical, 24)
-                            }
-                        }
-                        .foregroundStyle(theme.fg)
-                        .padding(.leading, CGFloat(settings.leftMargin))
-                        .padding(.trailing, CGFloat(settings.rightMargin))
-                        .padding(.top, CGFloat(settings.topMargin))
-                        .padding(.bottom, CGFloat(settings.bottomMargin))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(GeometryReader { g in
-                            Color.clear.preference(key: ContentHeightKey.self, value: g.size.height)
-                        })
-                        .background {
-                            ReaderScrollBoundaryObserver(chapterID: String(index),
-                                isEnabled: !loading && pendingEdge == nil && restorePermille == nil
-                                    && !scrollStartPending && nextChapter != nil && retryTarget == nil
-                                    && !showToc && !showSettings && commentURL == nil && !commentBusy,
-                                onNext: { goAcrossEdge(1) })
-                        }
-                        // 等间距透明锚点：位置恢复时按比例选一个滚过去。锚点只占背景，不影响排版。
-                        .background(alignment: .top) {
-                            GeometryReader { g in
-                                let scrollable = max(g.size.height - viewportHeight, 0)
-                                ZStack(alignment: .top) {
-                                    ForEach(0...100, id: \.self) { i in
-                                        Color.clear.frame(width: 1, height: 1)
-                                            .offset(y: scrollable * CGFloat(i) / 100)
-                                            .id("slot-\(i)")
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .top)
-                            }
-                        }
-                    }
-                    .coordinateSpace(name: "reader")
-                    .background(GeometryReader { g in
-                        Color.clear.preference(key: ViewportHeightKey.self, value: g.size.height)
-                    })
-                    .onPreferenceChange(ContentHeightKey.self) { h in
-                        contentHeight = h
-                        applyRestoreIfReady(proxy: proxy)
-                    }
-                    .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
-                    .onPreferenceChange(ScrollOffsetKey.self) { offset in recordScroll(offset) }
-                    .onChange(of: scrollResetRevision) { _ in
-                        if restorePermille != nil {
-                            applyRestoreIfReady(proxy: proxy)
-                        } else {
-                            let revision = scrollResetRevision
-                            DispatchQueue.main.async {
-                                guard revision == scrollResetRevision else { return }
-                                withAnimation(nil) { proxy.scrollTo("top", anchor: .top) }
-                                scrollStartPending = false
-                            }
-                        }
-                    }
-                    .onChange(of: loading) { _ in applyRestoreIfReady(proxy: proxy) }
-                }
-                .background {
-                    theme.bg.contentShape(Rectangle()).onTapGesture { toggleBars() }
-                }
+                continuousScrollBody
             }
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -445,14 +359,24 @@ struct ReaderView: View {
         .onChange(of: settings.rightMargin) { _ in repaginate() }
         .onChange(of: settings.topMargin) { _ in repaginate() }
         .onChange(of: settings.bottomMargin) { _ in repaginate() }
-        .onChange(of: settings.pageMode) { _ in
+        .onChange(of: settings.pageMode) { mode in
             pendingEdge = nil
             pendingChapterDirection = 0
-            repaginate()
+            if mode == 1 {
+                cancelScrollLoads()
+                scrollChapters.removeAll()
+                pendingLanding = .saved(scrollPosition)
+                repaginate(keepOffset: 0)
+            } else {
+                cancelPreparation()
+                preparedChapters.removeAll()
+                if chapters.indices.contains(index), !loading { resetScroll(landing: .saved(store.scrollPosition(book))) }
+            }
         }
         .onChange(of: screenSize) { _ in repaginate() }
         .onChange(of: pageInsets) { _ in repaginate() }
         .onDisappear {
+            cancelScrollLoads()
             cancelPreparation()
             preparedChapters.removeAll()
             contentRequestID = nil
@@ -463,9 +387,7 @@ struct ReaderView: View {
             pendingEdge = nil
             pendingChapterDirection = 0
             loading = false
-            restorePermille = nil
             pendingLanding = nil
-            scrollStartPending = false
             store.flushProgress()
         }
         .task { await start() }
@@ -515,29 +437,157 @@ struct ReaderView: View {
         await loadContent(at: index, landing: saved > 0 ? .saved(saved) : .start, requestID: requestID)
     }
 
-    /// 记录滚动位置（千分比）。内容还没排好、或正在恢复位置时不记录，避免把 0 写回去覆盖已存的位置。
-    private func recordScroll(_ offset: CGFloat) {
-        guard !loading, restorePermille == nil, !scrollStartPending, retryTarget == nil else { return }
-        let scrollable = contentHeight - viewportHeight
-        guard scrollable > 40 else { return }
-        let p = Int((min(max(offset, 0), scrollable) / scrollable) * 1000)
-        store.updateScrollPosition(book, permille: p)
+    // MARK: 连续滚动
+
+    @ViewBuilder
+    private var continuousScrollBody: some View {
+        if scrollChapters.isEmpty {
+            VStack {
+                if loading { ProgressView() }
+                else if let error { Text(error).foregroundStyle(.red) }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ReaderContinuousScrollView(chapters: scrollChapters.map { chapter in
+                ReaderScrollChapter(id: chapter.id, revision: chapter.revision,
+                                    content: AnyView(scrollChapterBody(chapter)))
+            }, request: scrollRequest,
+                layoutID: "\(settings.typographyValues)-\(settings.theme)-\(scrollBoundaryRevision)",
+                background: UIColor(theme.bg),
+                onPosition: { chapter, position in recordContinuousPosition(chapter, position: position) },
+                onApproachEdge: { direction in loadScrollNeighbor(direction) })
+        }
     }
 
-    /// 内容加载并排版完成后，滚到上次保存的位置（只恢复一次）。
-    private func applyRestoreIfReady(proxy: ScrollViewProxy) {
-        guard let target = restorePermille, !loading, viewportHeight > 0, contentHeight > 0 else { return }
-        let chapter = index
-        let revision = scrollResetRevision
-        let slot = min(max(Int((Double(target) / 10).rounded()), 0), 100)
-        DispatchQueue.main.async {
-            guard chapter == index, revision == scrollResetRevision, restorePermille == target else { return }
-            withAnimation(nil) {
-                proxy.scrollTo(contentHeight > viewportHeight + 40 ? "slot-\(slot)" : "top", anchor: .top)
+    private var scrollBoundaryRevision: String {
+        "\(scrollChapters.first?.id ?? -1)-\(scrollChapters.last?.id ?? -1)-\(scrollTasks.keys.sorted())-\(scrollErrors.keys.sorted())"
+    }
+
+    private func scrollChapterBody(_ content: ScrollReaderChapter) -> some View {
+        let chapter = chapters[content.id]
+        return VStack(alignment: .leading, spacing: CGFloat(settings.paragraphSpacing)) {
+            if chapter.isVolume {
+                VolumeTitleView(title: chapter.title, foreground: theme.fg)
+                    .padding(.vertical, 36)
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleBars() }
+            } else {
+                ChapterTitleView(title: chapter.title, fontSize: CGFloat(settings.fontSize), color: UIColor(theme.fg))
+                    .padding(.top, max(CGFloat(settings.fontSize), 20))
+                    .padding(.bottom, max(CGFloat(settings.fontSize) * 0.8, 14))
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleBars() }
+                ForEach(Array(content.readingBlocks.enumerated()), id: \.offset) { _, block in blockView(block) }
             }
-            restorePermille = nil
-            scrollStartPending = false
         }
+        .foregroundStyle(theme.fg)
+        .padding(.leading, CGFloat(settings.leftMargin))
+        .padding(.trailing, CGFloat(settings.rightMargin))
+        .padding(.top, CGFloat(settings.topMargin))
+        .padding(.bottom, max(CGFloat(settings.bottomMargin), 20))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.bg.contentShape(Rectangle()).onTapGesture { toggleBars() })
+        .overlay(alignment: .top) {
+            if content.id == scrollChapters.first?.id { scrollBoundary(-1) }
+        }
+        .overlay(alignment: .bottom) {
+            if content.id == scrollChapters.last?.id { scrollBoundary(1) }
+        }
+    }
+
+    @ViewBuilder
+    private func scrollBoundary(_ direction: Int) -> some View {
+        if let target = scrollNeighbor(direction) {
+            if let message = scrollErrors[target] {
+                VStack(spacing: 8) {
+                    Text(message).font(.caption).foregroundStyle(theme.fg.opacity(0.65)).lineLimit(2)
+                    Button("重试加载\(direction > 0 ? "下一章" : "上一章")") { loadScrollNeighbor(direction, retry: true) }
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 10).background(theme.bg.opacity(0.96))
+            } else if scrollTasks[target] != nil {
+                ProgressView().frame(maxWidth: .infinity).padding(.vertical, 4).allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func scrollNeighbor(_ direction: Int) -> Int? {
+        guard let edge = direction > 0 ? scrollChapters.last?.id : scrollChapters.first?.id else { return nil }
+        return readableIndex(from: edge + direction, direction: direction)
+    }
+
+    private func cancelScrollLoads() {
+        scrollGeneration = UUID()
+        scrollTasks.values.forEach { $0.cancel() }
+        scrollTasks.removeAll()
+    }
+
+    private func resetScroll(landing: ChapterLanding) {
+        cancelScrollLoads()
+        scrollErrors.removeAll()
+        scrollChapters = [ScrollReaderChapter(id: index, text: text, blocks: blocks)]
+        let position: Int
+        switch landing {
+        case .start: position = 0
+        case .end: position = 1000
+        case .saved(let value): position = value
+        }
+        scrollPosition = position
+        scrollRequest = ReaderScrollRequest(id: UUID(), chapter: index, permille: position)
+        loadScrollNeighbor(1)
+        loadScrollNeighbor(-1)
+    }
+
+    private func loadScrollNeighbor(_ direction: Int, retry: Bool = false) {
+        guard settings.pageMode == 0, let target = scrollNeighbor(direction), scrollTasks[target] == nil,
+              !scrollChapters.contains(where: { $0.id == target }), retry || scrollErrors[target] == nil else { return }
+        // 保留当前章前后窗口；短章不会仅因屏幕尚未填满而预读整本书。
+        if let position = scrollChapters.firstIndex(where: { $0.id == index }),
+           (direction > 0 ? scrollChapters.count - position - 1 : position) >= 2 { return }
+        scrollErrors[target] = nil
+        let generation = scrollGeneration
+        scrollTasks[target] = Task { @MainActor in
+            defer { if scrollGeneration == generation { scrollTasks[target] = nil } }
+            do {
+                let raw = try await rawContent(at: target, priority: .utility)
+                try Task.checkCancellation()
+                guard scrollGeneration == generation, settings.pageMode == 0,
+                      scrollNeighbor(direction) == target else { return }
+                let parsed = Self.readingContent(raw: raw, isVolume: chapters[target].isVolume)
+                let chapter = ScrollReaderChapter(id: target, text: parsed.text, blocks: parsed.blocks)
+                if direction > 0 { scrollChapters.append(chapter) }
+                else { scrollChapters.insert(chapter, at: 0) }
+                trimScrollChapters()
+            } catch is CancellationError {
+                return
+            } catch {
+                guard scrollGeneration == generation else { return }
+                scrollErrors[target] = "章节加载失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func trimScrollChapters() {
+        guard let position = scrollChapters.firstIndex(where: { $0.id == index }) else { return }
+        let start = max(position - 2, 0), end = min(position + 3, scrollChapters.count)
+        if start > 0 || end < scrollChapters.count { scrollChapters = Array(scrollChapters[start..<end]) }
+    }
+
+    private func recordContinuousPosition(_ chapter: Int, position: Int) {
+        guard settings.pageMode == 0, !loading, !showToc, !showSettings, commentURL == nil,
+              let content = scrollChapters.first(where: { $0.id == chapter }) else { return }
+        scrollPosition = position
+        if index != chapter {
+            index = chapter
+            text = content.text
+            blocks = content.blocks
+            store.updateProgress(book, index: chapter, title: chapters[chapter].title)
+            trimScrollChapters()
+            // 下一章已在同一画布中，进入它只更新阅读进度，不触发目录导航/页面替换。
+            loadScrollNeighbor(1)
+            loadScrollNeighbor(-1)
+            if let source = store.source(for: book.origin) { prefetch(source) }
+        }
+        store.updateScrollPosition(book, permille: position)
     }
 
     // MARK: 翻页模式
@@ -673,7 +723,6 @@ struct ReaderView: View {
         error = nil
         retryTarget = nil
         pendingLanding = nil
-        restorePermille = nil
         pendingEdge = nil
         pendingChapterDirection = 0
         store.updateProgress(book, index: index, title: chapters[index].title)
@@ -857,6 +906,7 @@ struct ReaderView: View {
 
     private func loadChapter(_ target: Int, landing: ChapterLanding) {
         guard !loading, chapters.indices.contains(target) else { return }
+        cancelScrollLoads()
         cancelPreparation()
         chapterTask?.cancel()
         // 停止旧预读队列的后续任务；在途的目标章由共享缓存接管，不会重复抓取。
@@ -956,20 +1006,12 @@ struct ReaderView: View {
         blocks = content.blocks
         pages = []
         pageIndex = 0
-        restorePermille = nil
         if settings.pageMode == 1 {
             pendingLanding = landing
             repaginate(keepOffset: 0)
         } else {
             pendingLanding = nil
-            switch landing {
-            case .start: break
-            case .end: restorePermille = 1000
-            case .saved(let position): restorePermille = position
-            }
-            // 等 SwiftUI 排好新章后再恢复，禁止旧章惯性驱动下一次换章。
-            scrollStartPending = true
-            scrollResetRevision += 1
+            resetScroll(landing: landing)
         }
     }
 
@@ -996,18 +1038,4 @@ struct ReaderView: View {
             }
         }
     }
-}
-
-
-private struct ScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-private struct ContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-private struct ViewportHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

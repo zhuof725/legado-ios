@@ -106,7 +106,8 @@ final class NativeReaderTests: XCTestCase {
                         "current": current, "before": before, "after": after, "chainValid": "true",
                         "bodyCurrent": "true", "alignment": "production", "baseline": "true", "continuation": "true",
                         "containerTheme": "true", "frontTheme": "true", "backsTheme": "true",
-                        "backsOpaque": "true", "backsHidden": "true", "currentOnly": "true", "statusHidden": "true"]
+                        "backsOpaque": "true", "backsHidden": "true", "backsPaperText": "true",
+                        "backsMirrored": "true", "backsInert": "true", "currentOnly": "true", "statusHidden": "true"]
         assertFields(actual, expected, file: file, line: line)
         let backs = Int(actual["backCount"] ?? "") ?? -1
         if mode == "curl" { XCTAssertGreaterThan(backs, 0, "必须查到真实纸背", file: file, line: line) }

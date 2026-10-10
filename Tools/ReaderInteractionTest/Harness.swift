@@ -18,7 +18,9 @@ struct HarnessApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if ProcessInfo.processInfo.arguments.contains("--typography-mode") {
+            if ProcessInfo.processInfo.arguments.contains("--continuous-scroll-mode") {
+                ContinuousScrollHarnessView()
+            } else if ProcessInfo.processInfo.arguments.contains("--typography-mode") {
                 TypographyHarnessView()
             } else if let mode = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--volume-mode=") }) {
                 VolumeHarnessView(mode: String(mode.dropFirst("--volume-mode=".count)))

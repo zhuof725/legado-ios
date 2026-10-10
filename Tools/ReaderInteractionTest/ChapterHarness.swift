@@ -102,7 +102,7 @@ struct ChapterHarnessView: View {
                         }
                     }.accessibilityIdentifier("arm-native-drag")
                     Button("检查原生") {
-                        nativeInfo = NativeReaderInspection.snapshot(background: background,
+                        nativeInfo = NativeReaderInspection.snapshot(background: background, revision: revision,
                             bodyPrefix: "第\(chapter + 1)章，第\(page + 1)页。正文版本\(revision)。")
                             + ";" + dragObservation.snapshot
                     }.accessibilityIdentifier("inspect-native")
@@ -185,7 +185,7 @@ private enum NativeReaderInspection {
         return node.subviews.lazy.compactMap { paragraph($0) }.first
     }
 
-    static func snapshot(background: UIColor, bodyPrefix: String) -> String {
+    static func snapshot(background: UIColor, revision: Int, bodyPrefix: String) -> String {
         guard let page = pageController(), let source = page.dataSource,
               let shown = page.viewControllers?.first, let host = front(shown),
               let text = paragraph(host.view), let attributed = text.attributedText, attributed.length > 0,
@@ -230,6 +230,20 @@ private enum NativeReaderInspection {
             && style.minimumLineHeight.isFinite && style.minimumLineHeight > 0
             && style.maximumLineHeight.isFinite && style.maximumLineHeight >= style.minimumLineHeight
         func themed(_ view: UIView) -> Bool { matches(view.backgroundColor, background, traits: view.traitCollection) }
+        // 读取真实纸背中的排版正文，不接受只有颜色或只有来源 ID 的占位背面。
+        // B(n) 的正文应属于 dataSource 给出的 F(n-1)，跨章与同 ID 刷新也如此。
+        func hasPaperText(_ controller: UIViewController) -> Bool {
+            guard let back = controller as? ReaderPageBack,
+                  let paper = source.pageViewController(page, viewControllerBefore: back) as? ReaderPageHost,
+                  let chapter = Int(paper.contentID), let rendered = paragraph(back.view),
+                  let body = rendered.attributedText, body.length > 0,
+                  rendered.bounds.width > 0, rendered.bounds.height > 0,
+                  !rendered.isHidden, rendered.alpha > 0,
+                  let ink = body.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
+                  let expectedInk = attributed.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor else { return false }
+            return body.string.hasPrefix("第\(chapter + 1)章，第\(paper.pageIndex + 1)页。正文版本\(revision)。")
+                && matches(ink, expectedInk, traits: back.view.traitCollection)
+        }
         let fields = [
             "native=\(type(of: page) == UIPageViewController.self)", "transition=\(page.transitionStyle == .pageCurl ? "curl" : "scroll")",
             "double=\(page.isDoubleSided)", "idle=\((page.delegate as? PageTurnCoordinator)?.isIdle == true)",
@@ -241,6 +255,9 @@ private enum NativeReaderInspection {
             "backCount=\(backs.count)", "backsTheme=\(backs.allSatisfy { themed($0.view) })",
             "backsOpaque=\(backs.allSatisfy { $0.view.isOpaque && $0.view.alpha == 1 })",
             "backsHidden=\(backs.allSatisfy { $0.view.accessibilityElementsHidden })",
+            "backsPaperText=\(backs.allSatisfy { hasPaperText($0) })",
+            "backsMirrored=\(backs.allSatisfy { $0.children.first?.view.transform == CGAffineTransform(scaleX: -1, y: 1) })",
+            "backsInert=\(backs.allSatisfy { !$0.view.isUserInteractionEnabled })",
             "currentOnly=\(!host.view.accessibilityElementsHidden && fronts.allSatisfy { $0 === host || $0.view.accessibilityElementsHidden })",
             "statusHidden=\(page.view.window?.windowScene?.statusBarManager?.isStatusBarHidden == true)"
         ]
