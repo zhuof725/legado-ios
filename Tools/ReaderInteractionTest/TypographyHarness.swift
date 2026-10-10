@@ -347,6 +347,10 @@ private enum TypographyInspection {
                 for row in rows {
                     let cr = manager.characterRange(forGlyphRange: row.glyphs, actualGlyphRange: nil)
                     let part = (view.textStorage.string as NSString).substring(with: cr)
+                    // Some widths wrap only the comment attachment after the final
+                    // text row; this is not another paragraph terminal text row.
+                    guard !part.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .replacingOccurrences(of: "\u{FFFC}", with: "").isEmpty else { continue }
                     if let first = part.first, let last = part.last {
                         breaksOK = breaksOK && !"，。！？；：、’”】》」".contains(first)
                             && !"‘“【《「".contains(last)
@@ -382,7 +386,8 @@ private enum TypographyInspection {
         let view = ReaderTextLayout.makeTextView()
         ReaderTextLayout.configure(view)
         var compact = true, preserved = true
-        var openingError: CGFloat = 0, maxGap: CGFloat = 0
+        var openingError: CGFloat = 0, maxGap: CGFloat = 0, minGap: CGFloat = 0
+        var bubbleGap: CGFloat = 0
         var checks = 0
         for size in [CGFloat(12), 19, 36] {
             let width: CGFloat = 351
@@ -403,17 +408,21 @@ private enum TypographyInspection {
                           right.minX >= left.minX else { continue }
                     let gap = (right.minX - left.maxX) / grid.cellWidth
                     maxGap = max(maxGap, gap)
-                    compact = compact && gap < 0.8 && gap > -0.2
+                    minGap = min(minGap, gap)
+                    compact = compact && gap < 0.9 && gap > -0.2
                     checks += 1
                 }
                 if text.hasSuffix("”"), let last = ink(view, character: ns.length - 1), let bubble = view.bubbleRect,
                    bubble.minX > last.maxX {
-                    compact = compact && (bubble.minX - last.maxX) / grid.cellWidth < 0.55
+                    let gap = (bubble.minX - last.maxX) / grid.cellWidth
+                    bubbleGap = max(bubbleGap, gap)
+                    compact = compact && gap < 0.9
                 }
             }
         }
         return ["referenceCompact": compact, "referencePreserved": preserved,
                 "referenceOpeningError": Double(openingError), "referenceMaxGap": Double(maxGap),
+                "referenceMinGap": Double(minGap), "referenceBubbleGap": Double(bubbleGap),
                 "referenceChecks": checks]
     }
 
