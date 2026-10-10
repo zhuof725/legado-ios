@@ -276,6 +276,76 @@ private enum TypographyInspection {
                 "bubbleGapError": Double(bubbleGapError), "bubbleBaselineError": Double(bubbleBaselineError)]
     }
 
+    private static func bottomReport() -> [String: Any] {
+        var baselineError: CGFloat = 0, overflow: CGFloat = 0, topError: CGFloat = 0
+        var checked = 0, continued = 0, comments = 0
+        var terminalOK = true, specialOK = true
+        func descendants(_ root: UIView) -> [CommentTextView] {
+            (root as? CommentTextView).map { [$0] } ?? root.subviews.flatMap { descendants($0) }
+        }
+        for size in [CGFloat(12), 19, 36] {
+            var config = ReaderPaginator.Configuration(pageSize: CGSize(width: 391, height: 720),
+                safeInsets: UIEdgeInsets(top: 47, left: 0, bottom: 34, right: 0),
+                fontSize: size, lineSpacing: 8, paragraphSpacing: 7,
+                leftInset: 23, rightInset: 31, topInset: 19, bottomInset: 17)
+            config.chapterTitle = "标题保持顶部位置，正文末行统一高度"
+            let blocks: [ContentBlock] = (0..<12).map { index in
+                .paragraph(text: String(repeating: TypographyFixtures.dialogue, count: index % 3 + 1),
+                    commentCount: 82, commentURL: nil)
+            } + [.paragraph(text: "章末短尾段", commentCount: 3, commentURL: nil)]
+            let pages = ReaderPaginator.paginate(blocks, configuration: config)
+            terminalOK = terminalOK && pages.last?.justifiedGap == nil
+            for (index, page) in pages.enumerated() {
+                if index != pages.count - 1 && page.justifiedGap == nil { terminalOK = false }
+                let content = PageContentView(page: page, fontSize: Double(size), lineSpacing: 8,
+                    fg: .black, bg: .white, title: config.chapterTitle, pageNumber: index + 1,
+                    pageCount: pages.count, onTapComment: { _ in },
+                    safeInsets: EdgeInsets(top: 47, leading: 0, bottom: 34, trailing: 0),
+                    paragraphSpacing: 7, leftMargin: 23, rightMargin: 31, topMargin: 19,
+                    bottomMargin: 17, showsChapterTitle: true)
+                let host = UIHostingController(rootView: content)
+                let window = UIWindow(frame: CGRect(origin: .zero, size: config.pageSize))
+                window.rootViewController = host
+                window.isHidden = false
+                host.view.frame = window.bounds
+                for _ in 0..<3 { host.view.setNeedsLayout(); host.view.layoutIfNeeded() }
+                let views = descendants(host.view).sorted {
+                    $0.convert(CGPoint.zero, to: host.view).y < $1.convert(CGPoint.zero, to: host.view).y
+                }
+                let grid = ReaderTextLayout.metrics(fontSize: size, width: config.textWidth)
+                let bottom = config.pageSize.height - 34 - config.bottomInset - 24
+                let top = 47 + config.topInset + (index == 0 ? config.headerHeight : 0)
+                if let first = views.first {
+                    topError = max(topError, abs(first.convert(CGPoint.zero, to: host.view).y - top))
+                } else { topError = 999 }
+                if let last = views.last, let row = lines(last).last {
+                    let y = last.convert(CGPoint(x: 0, y: row.baseline), to: host.view).y
+                    if page.justifiedGap != nil {
+                        baselineError = max(baselineError, abs(y - (bottom - grid.lineHeight + grid.baseline)))
+                        checked += 1
+                    }
+                    overflow = max(overflow, y + grid.lineHeight - grid.baseline - bottom)
+                }
+                for view in views {
+                    if let rect = view.bubbleRect {
+                        if !view.isBubble(at: CGPoint(x: rect.midX, y: rect.midY)) { terminalOK = false }
+                        comments += 1
+                    }
+                }
+                continued += page.continuationIndices.count
+                window.isHidden = true
+                window.rootViewController = nil
+            }
+            let short = ReaderPaginator.paginate([.paragraph(text: "短章", commentCount: 1, commentURL: nil)], configuration: config)
+            terminalOK = terminalOK && short.count == 1 && short[0].justifiedGap == nil
+            let mixed = ReaderPaginator.paginate([.image(src: "", clickURL: nil)] + blocks, configuration: config)
+            specialOK = specialOK && mixed.first?.justifiedGap == nil
+        }
+        return ["bottomBaselineError": Double(baselineError), "bottomOverflow": Double(overflow),
+                "bottomTopError": Double(topError), "bottomPages": checked, "bottomContinuations": continued,
+                "bottomComments": comments, "bottomTerminalOK": terminalOK, "bottomSpecialOK": specialOK]
+    }
+
     static func snapshot() -> String {
         precondition(Thread.isMainThread)
         let view = ReaderTextLayout.makeTextView()
@@ -425,11 +495,15 @@ private enum TypographyInspection {
                 let continued = page.continuationIndices.contains(index)
                 if continued { continuationCount += 1 }
                 if count > 0 { commentCount += 1 }
+                let gap = CGFloat(page.justifiedGap ?? 0)
                 let measured = measurer.height(text: text, count: count, width: config.textWidth,
-                    fontSize: config.fontSize, lineSpacing: config.lineSpacing, continuation: continued)
+                    fontSize: config.fontSize, lineSpacing: config.lineSpacing + gap, continuation: continued)
                 let height = index < page.blockHeights.count ? CGFloat(page.blockHeights[index]) : -1
-                paragraphHeightError = max(paragraphHeightError, abs(measured - height))
-                used += height + (index > 0 ? config.blockSpacing : 0)
+                let actual = page.justifiedGap == nil ? measured : measurer.rows(text: text, count: count,
+                    width: config.textWidth, fontSize: config.fontSize, lineSpacing: config.lineSpacing + gap,
+                    continuation: continued).height
+                paragraphHeightError = max(paragraphHeightError, abs(actual - height))
+                used += height + (index > 0 ? config.blockSpacing + gap : 0)
                 offset += text.count
                 reconstructed += text
             }
@@ -447,6 +521,7 @@ private enum TypographyInspection {
             "sourceOK": reconstructed == source + "短尾段", "continuations": continuationCount,
             "commentCount": commentCount, "pages": pages.count, "worstBaseline": worstBaseline
         ]
+        report.merge(bottomReport()) { _, new in new }
         report.merge(scrollHostReport()) { _, new in new }
         report.merge(punctuationReport()) { _, new in new }
         guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),

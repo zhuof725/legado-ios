@@ -16,6 +16,14 @@ final class TypographyTests: XCTestCase {
         func number(_ key: String) throws -> Double {
             try XCTUnwrap(report[key] as? NSNumber, "Missing \(key): \(metrics.label)").doubleValue
         }
+        for key in ["bottomBaselineError", "bottomOverflow", "bottomTopError"] {
+            XCTAssertLessThanOrEqual(try number(key), 0.75, "\(key): \(metrics.label)")
+        }
+        XCTAssertGreaterThan(try number("bottomPages"), 6, metrics.label)
+        XCTAssertGreaterThan(try number("bottomContinuations"), 0, metrics.label)
+        XCTAssertGreaterThan(try number("bottomComments"), 6, metrics.label)
+        XCTAssertEqual(report["bottomTerminalOK"] as? Bool, true, metrics.label)
+        XCTAssertEqual(report["bottomSpecialOK"] as? Bool, true, metrics.label)
         // 首行/续段、全宽标点、不同字号和非整数字号倍数的宽度，实际字形落在同一网格。
         for key in ["gridError", "stepError", "indentError", "edgeError", "tailError", "widthError"] {
             XCTAssertLessThanOrEqual(try number(key), 0.25, "\(key): \(metrics.label)")

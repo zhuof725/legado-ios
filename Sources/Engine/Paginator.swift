@@ -22,6 +22,9 @@ struct BookPage: Equatable {
     /// UIKit 分页器测得的块高度，单位为点；下标对应 blocks。
     /// Engine 分页器不填此字段，保留它不会让 portable paginator 依赖 UIKit。
     var blockHeights: [Double] = []
+    /// 非章末纯正文页的垂直匀排余量；行间和段间各增加此值。
+    /// nil 保留自然排版（滚动、章末、图片/卡片页及稀疏页）。
+    var justifiedGap: Double? = nil
 }
 
 enum Paginator {

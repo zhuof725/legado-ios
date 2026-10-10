@@ -54,11 +54,14 @@ struct PageContentView: View {
                         let continuation = page.continuationIndices.contains(blockIndex)
                         InlineCommentParagraph(text: t, count: count,
                                                 fontSize: fontSize,
-                                                lineSpacing: lineSpacing,
+                                                lineSpacing: lineSpacing + (page.justifiedGap ?? 0),
                                                 color: UIColor(fg),
                                                 continuation: continuation,
                                                 onTap: { onTapComment(url) })
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(height: page.justifiedGap != nil && blockIndex < page.blockHeights.count
+                                ? CGFloat(page.blockHeights[blockIndex]) : nil, alignment: .top)
+                            .padding(.top, blockIndex > 0 ? CGFloat(page.justifiedGap ?? 0) : 0)
                     case .hotComment(let label, let t, let click):
                         HStack(spacing: 10) {
                             Text(label).font(.system(size: max(fontSize - 5, 11), weight: .bold)).foregroundStyle(.white)

@@ -221,6 +221,24 @@ enum ReaderTextLayout {
             view = ReaderTextLayout.makeTextView()
             ReaderTextLayout.configure(view)
         }
+        /// 不含末行之后的行距；与固定正文块 frame 共用实际 TextKit 行原点。
+        func rows(text: String, count: Int, width: CGFloat, fontSize: CGFloat,
+                  lineSpacing: CGFloat, continuation: Bool) -> (count: Int, height: CGFloat) {
+            _ = height(text: text, count: count, width: width, fontSize: fontSize,
+                       lineSpacing: lineSpacing, continuation: continuation)
+            let manager = view.layoutManager
+            manager.ensureLayout(for: view.textContainer)
+            var count = 0
+            var bottom: CGFloat = 0
+            manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(for: view.textContainer)) {
+                rect, _, _, glyphs, _ in
+                guard glyphs.length > 0 else { return }
+                count += 1
+                bottom = rect.minY + ReaderTextLayout.metrics(fontSize: fontSize, width: width).lineHeight
+            }
+            return (count, bottom)
+        }
+
         func height(text: String, count: Int, width: CGFloat, fontSize: CGFloat,
                     lineSpacing: CGFloat, continuation: Bool = false) -> CGFloat {
             view.render(text: text, count: count, fontSize: fontSize, lineSpacing: lineSpacing,

@@ -155,6 +155,30 @@ enum ReaderPaginator {
             }
         }
         flush()
+        // 分页边界只由自然行距决定；后处理绝不重拆字符，避免重新分页振荡。
+        for index in pages.indices.dropLast() {
+            let page = pages[index]
+            guard page.blocks.allSatisfy({ if case .paragraph = $0 { return true }; return false }) else { continue }
+            let capacity = index == 0 ? configuration.firstPageBodyHeight : configuration.bodyHeight
+            var rows: [(count: Int, height: CGFloat)] = []
+            for (blockIndex, block) in page.blocks.enumerated() {
+                if case .paragraph(let text, let count, _) = block {
+                    rows.append(measurer.rows(text: text, count: count, width: width,
+                        fontSize: configuration.fontSize, lineSpacing: configuration.lineSpacing,
+                        continuation: page.continuationIndices.contains(blockIndex)))
+                }
+            }
+            let gaps = rows.reduce(0) { $0 + $1.count } - 1
+            let natural = rows.reduce(CGFloat(0)) { $0 + $1.height }
+                + CGFloat(max(rows.count - 1, 0)) * configuration.blockSpacing
+            let residual = capacity - natural
+            // 少量正文后接图片/卡片时不制造巨大的行间空白。
+            guard gaps > 0, natural >= capacity * 0.7, residual >= 0 else { continue }
+            let extra = residual / CGFloat(gaps)
+            guard extra <= max(configuration.fontSize * 0.5, 4) else { continue }
+            pages[index].justifiedGap = Double(extra)
+            pages[index].blockHeights = rows.map { Double($0.height + CGFloat($0.count - 1) * extra) }
+        }
         return pages
     }
 
