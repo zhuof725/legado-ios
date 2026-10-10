@@ -26,7 +26,7 @@ struct PageContentView: View {
     let pageCount: Int
     let onTapComment: (String?) -> Void
     var safeInsets = EdgeInsets()
-    var paragraphSpacing: Double = 2
+    var paragraphSpacing: Double = 8
     var leftMargin: Double = 20
     var rightMargin: Double = 20
     var topMargin: Double = 16
@@ -46,7 +46,8 @@ struct PageContentView: View {
                 VStack(alignment: .leading, spacing: CGFloat(paragraphSpacing)) {
                 if showsChapterTitle && pageNumber == 1 && !title.isEmpty {
                     ChapterTitleView(title: title, fontSize: CGFloat(fontSize), color: UIColor(fg))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, ChapterTitleLayout.bottomSpacing(fontSize: CGFloat(fontSize)))
                 }
                 ForEach(Array(page.blocks.enumerated()), id: \.offset) { blockIndex, block in
                     switch block {

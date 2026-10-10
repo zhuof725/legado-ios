@@ -8,7 +8,7 @@ enum ReaderPaginator {
         var safeInsets: UIEdgeInsets = .zero
         var fontSize: CGFloat
         var lineSpacing: CGFloat
-        var paragraphSpacing: CGFloat = 2
+        var paragraphSpacing: CGFloat = 8
         var leftInset: CGFloat = 20
         var rightInset: CGFloat = 20
         var topInset: CGFloat = 16
@@ -20,7 +20,7 @@ enum ReaderPaginator {
         var blockSpacing: CGFloat { paragraphSpacing }
         var headerHeight: CGFloat {
             chapterTitle.isEmpty ? 0 : ChapterTitleLayout.height(title: chapterTitle,
-                fontSize: fontSize, width: textWidth) + paragraphSpacing
+                fontSize: fontSize, width: textWidth) + ChapterTitleLayout.bottomSpacing(fontSize: fontSize) + paragraphSpacing
         }
 
         var textWidth: CGFloat {

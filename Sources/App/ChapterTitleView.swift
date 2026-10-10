@@ -3,9 +3,11 @@ import UIKit
 
 /// 章节标题不截断；分页器和阅读视图使用同一 UILabel 测量方式。
 enum ChapterTitleLayout {
+    static func bottomSpacing(fontSize: CGFloat) -> CGFloat { max(fontSize * 0.8, 14) }
     static func label(title: String, fontSize: CGFloat, color: UIColor) -> UILabel {
         let label = UILabel()
         label.numberOfLines = 0
+        label.textAlignment = .center
         label.font = .systemFont(ofSize: max(fontSize + 2, 20), weight: .semibold)
         label.textColor = color
         label.text = title

@@ -167,6 +167,23 @@ enum ReaderTextLayout {
         }
         resolvePunctuation(rightIsGrid: false)
         finishRun()
+        // Optical exceptions are limited to CJK-context curly quotes and a sentence
+        // stop immediately before a closing quote. Keep the source and UTF-16 ranges
+        // intact; Han, ellipses and all other grid runs retain their cell advances.
+        let source = text as NSString
+        let quotes = CharacterSet(charactersIn: "‘’“”")
+        for index in 0..<source.length {
+            guard let scalar = UnicodeScalar(source.character(at: index)), quotes.contains(scalar),
+                  result.attribute(.kern, at: index, effectiveRange: nil) != nil else { continue }
+            result.addAttributes([.font: grid.font, .kern: 0, .ligature: 0],
+                                 range: NSRange(location: index, length: 1))
+            if "’”".unicodeScalars.contains(scalar), index > 0,
+               let previous = UnicodeScalar(source.character(at: index - 1)),
+               "，。、；：！？".unicodeScalars.contains(previous) {
+                result.addAttribute(.kern, value: grid.tracking - grid.cellWidth * 0.5,
+                                    range: NSRange(location: index - 1, length: 1))
+            }
+        }
         if count > 0 {
             // 保留原有的一个分隔字符；显式固定为四分之一字格，避免系统空格宽度漂移。
             var gapAttributes = attrs

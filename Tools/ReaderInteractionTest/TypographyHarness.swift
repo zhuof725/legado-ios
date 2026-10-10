@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreText
 
 private enum TypographyFixtures {
     static let dialogue = "“春江花月夜，”他说，‘远处的山川——仍在风雨里……’玛丽·苏回答：“明天继续阅读。”"
@@ -168,7 +169,16 @@ private enum TypographyInspection {
                     for glyph in row.glyphs.location..<NSMaxRange(row.glyphs) {
                         if manager.characterIndexForGlyph(at: glyph) >= (text as NSString).length { continue }
                         let x = row.rect.minX + manager.location(forGlyphAt: glyph).x
-                        gridError = max(gridError, abs(x - (x / grid.cellWidth).rounded() * grid.cellWidth))
+                        // Curly quotes shift the grid phase locally. Adjacent Han still
+                        // advance exactly one cell; optical marks are checked separately.
+                        let ci = manager.characterIndexForGlyph(at: glyph)
+                        let ns = text as NSString
+                        if glyph > row.glyphs.location, ci > 0,
+                           (0x4E00...0x9FFF).contains(Int(ns.character(at: ci))),
+                           (0x4E00...0x9FFF).contains(Int(ns.character(at: ci - 1))) {
+                            gridError = max(gridError, abs(x - row.rect.minX
+                                - manager.location(forGlyphAt: glyph - 1).x - grid.cellWidth))
+                        }
                         glyphs += 1
                     }
                 }
@@ -239,7 +249,7 @@ private enum TypographyInspection {
                 let x = view.layoutManager.location(forGlyphAt: glyph).x
                 let fraction = (bounds.midX - x) / grid.cellWidth
                 inkSamples["\(size):\(mark)"] = [Double(fraction), Double(bounds.midY - han.midY)]
-                if ["‘", "“", "【"].contains(mark) { inkOK = inkOK && fraction > 0.5 }
+                if mark == "【" { inkOK = inkOK && fraction > 0.5 }
                 else { inkOK = inkOK && fraction < 0.5 }
                 if ["，", "。"].contains(mark) { inkOK = inkOK && bounds.midY > han.midY }
                 inkChecks += 1
@@ -390,8 +400,24 @@ private enum TypographyInspection {
                             var previous: CGFloat?
                             for glyph in row.glyphs.location..<NSMaxRange(row.glyphs) {
                                 let x = row.rect.minX + view.layoutManager.location(forGlyphAt: glyph).x
-                                gridError = max(gridError, abs(x - (x / grid.cellWidth).rounded() * grid.cellWidth))
-                                if let previous { stepError = max(stepError, abs(x - previous - grid.cellWidth)) }
+                                if text == han {
+                                    gridError = max(gridError, abs(x - (x / grid.cellWidth).rounded() * grid.cellWidth))
+                                }
+                                if let previous {
+                                    let manager = view.layoutManager
+                                    let ci = manager.characterIndexForGlyph(at: glyph - 1)
+                                    let ns = text as NSString
+                                    let mark = ns.substring(with: NSRange(location: ci, length: 1))
+                                    var expected = grid.cellWidth
+                                    if "‘’“”".contains(mark) {
+                                        let sample = NSAttributedString(string: mark, attributes: [.font: grid.font, .kern: 0, .ligature: 0])
+                                        expected = CGFloat(CTLineGetTypographicBounds(CTLineCreateWithAttributedString(sample), nil, nil, nil))
+                                    } else if "，。、；：！？".contains(mark), ci + 1 < ns.length,
+                                              "’”".contains(ns.substring(with: NSRange(location: ci + 1, length: 1))) {
+                                        expected -= grid.cellWidth * 0.5
+                                    }
+                                    stepError = max(stepError, abs(x - previous - expected))
+                                }
                                 previous = x
                                 gridGlyphs += 1
                             }

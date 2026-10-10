@@ -3,7 +3,7 @@ import SwiftUI
 final class ReadSettings: ObservableObject {
     @AppStorage("fontSize") var fontSize: Double = 19
     @AppStorage("lineSpacing") var lineSpacing: Double = 8
-    @AppStorage("paragraphSpacing") var paragraphSpacing: Double = 2
+    @AppStorage("paragraphSpacing") var paragraphSpacing: Double = 8
     @AppStorage("leftMargin") var leftMargin: Double = 20
     @AppStorage("rightMargin") var rightMargin: Double = 20
     @AppStorage("topMargin") var topMargin: Double = 16
@@ -13,6 +13,11 @@ final class ReadSettings: ObservableObject {
     @AppStorage("pageTurnStyle") var pageTurnStyle: Int = 0
 
     init() {
+        // One-time migration of the old cramped default; preserve custom spacing.
+        if !UserDefaults.standard.bool(forKey: "readerOpticalTypographyV1") {
+            if paragraphSpacing == 2 { paragraphSpacing = 8 }
+            UserDefaults.standard.set(true, forKey: "readerOpticalTypographyV1")
+        }
         // 旧版淡入淡出值 2 回退到原生滑动，保留字号、主题与阅读进度。
         if pageTurnStyle != 0 && pageTurnStyle != 1 { pageTurnStyle = 0 }
     }
