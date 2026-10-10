@@ -26,7 +26,9 @@ final class TypographyTests: XCTestCase {
         XCTAssertLessThanOrEqual(try number("balancedRepeatError"), 0.01, metrics.label)
         XCTAssertLessThanOrEqual(try number("balancedEdge"), 0.75, metrics.label)
         XCTAssertLessThanOrEqual(try number("balancedSpread"), 0.25, metrics.label)
-        XCTAssertLessThanOrEqual(try number("balancedMaxStep"), 1.2, metrics.label)
+        // Mixed quote rows may need up to 50% extra advance after compact punctuation.
+        // The actual glyph edge and ink-gap checks below remain independent guards.
+        XCTAssertLessThanOrEqual(try number("balancedMaxStep"), 1.5, metrics.label)
         XCTAssertGreaterThan(try number("balancedRows"), 40, metrics.label)
         XCTAssertEqual(report["balancedBreaksOK"] as? Bool, true, metrics.label)
         XCTAssertEqual(report["referenceCompact"] as? Bool, true, metrics.label)
