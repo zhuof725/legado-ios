@@ -97,7 +97,7 @@ struct ChapterHarnessView: View {
                     Button("刷新正文") { revision += 1 }.accessibilityIdentifier("refresh-content")
                     Button("切换主题") { dark.toggle() }.accessibilityIdentifier("toggle-theme")
                     Button("观察手势") {
-                        dragObservation.arm {
+                        dragObservation.arm(background: background, revision: revision) {
                             "duringChapter=\(chapter);duringPage=\(page);duringEdges=\(edgeCount);duringCommits=\(commits);duringLoading=\(loading)"
                         }
                     }.accessibilityIdentifier("arm-native-drag")
@@ -260,13 +260,33 @@ private enum NativeReaderInspection {
             "backCount=\(backs.count)", "backsTheme=\(backs.allSatisfy { themed($0.view) })",
             "backsOpaque=\(backs.allSatisfy { $0.view.isOpaque && $0.view.alpha == 1 })",
             "backsHidden=\(backs.allSatisfy { $0.view.accessibilityElementsHidden })",
-            "backsPaperText=\(backs.allSatisfy { hasPaperText($0) })",
+            "backsPaperText=\(backs.filter { $0.view.window != nil }.allSatisfy { hasPaperText($0) })",
             "backsMirrored=\(backs.allSatisfy { $0.children.first?.view.transform == CGAffineTransform(scaleX: -1, y: 1) })",
             "backsInert=\(backs.allSatisfy { !$0.view.isUserInteractionEnabled })",
             "currentOnly=\(!host.view.accessibilityElementsHidden && fronts.allSatisfy { $0 === host || $0.view.accessibilityElementsHidden })",
             "statusHidden=\(page.view.window?.windowScene?.statusBarManager?.isStatusBarHidden == true)"
         ]
         return fields.joined(separator: ";")
+    }
+
+    static func visiblePaper(_ page: UIPageViewController, background: UIColor, revision: Int) -> String? {
+        guard let source = page.dataSource else { return nil }
+        func backs(_ node: UIViewController) -> [ReaderPageBack] {
+            (node as? ReaderPageBack).map { [$0] } ?? node.children.flatMap { backs($0) }
+        }
+        for back in backs(page) {
+            guard back.view.window != nil, let rendered = paragraph(back.view),
+                  let body = rendered.attributedText, body.length > 0,
+                  rendered.bounds.width > 0, rendered.bounds.height > 0,
+                  let paper = source.pageViewController(page, viewControllerBefore: back) as? ReaderPageHost,
+                  let chapter = Int(paper.contentID) else { continue }
+            let prefix = "第\(chapter + 1)章，第\(paper.pageIndex + 1)页。正文版本\(revision)。"
+            let valid = body.string.hasPrefix(prefix) && matches(back.view.backgroundColor, background,
+                traits: back.view.traitCollection) && back.view.isOpaque
+                && back.children.first?.view.transform == CGAffineTransform(scaleX: -1, y: 1)
+            return "duringBackText=\(valid);duringBackPage=\(paper.contentID):\(paper.pageIndex)"
+        }
+        return nil
     }
 
     private static func matches(_ actual: UIColor?, _ expected: UIColor, traits: UITraitCollection) -> Bool {
@@ -285,10 +305,14 @@ private final class NativeDragObservation: NSObject {
     private weak var page: UIPageViewController?
     private var recognizers: [UIGestureRecognizer] = []
     private var readProgress: (() -> String)?
+    private var background = UIColor.white
+    private var revision = 0
     private(set) var snapshot = "observed=false"
 
-    func arm(readProgress: @escaping () -> String) {
+    func arm(background: UIColor, revision: Int, readProgress: @escaping () -> String) {
         disarm()
+        self.background = background
+        self.revision = revision
         snapshot = "observed=false"
         guard let page = NativeReaderInspection.pageController() else { return }
         self.page = page
@@ -307,7 +331,13 @@ private final class NativeDragObservation: NSObject {
         guard gesture.state == .changed, let page,
               let coordinator = page.delegate as? PageTurnCoordinator, coordinator.isInteractive,
               let readProgress else { return }
-        snapshot = "observed=true;duringIdle=false;" + readProgress()
+        if !snapshot.hasPrefix("observed=true") {
+            snapshot = "observed=true;duringIdle=false;duringCurl=\(page.transitionStyle == .pageCurl);" + readProgress()
+        }
+        if page.transitionStyle == .pageCurl {
+            guard let paper = NativeReaderInspection.visiblePaper(page, background: background, revision: revision) else { return }
+            snapshot += ";" + paper
+        }
         disarm()
     }
 

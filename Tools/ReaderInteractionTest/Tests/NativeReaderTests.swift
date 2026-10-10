@@ -121,6 +121,9 @@ final class NativeReaderTests: XCTestCase {
         assertFields(actual, ["observed": "true", "duringIdle": "false", "duringChapter": "\(chapter)",
                               "duringPage": "\(page)", "duringEdges": "0", "duringCommits": "\(commits)",
                               "duringLoading": "false"], file: file, line: line)
+        if actual["duringCurl"] == "true" {
+            XCTAssertEqual(actual["duringBackText"], "true", "真实拖动期间必须挂载纸背正文：\(actual)", file: file, line: line)
+        }
     }
 
     private func fields(_ label: String) -> [String: String] {
