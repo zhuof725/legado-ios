@@ -105,9 +105,11 @@ enum ReaderTextLayout {
         style.maximumLineHeight = grid.lineHeight
         // 段间距和标题仍由外层布局计算；不把最后一行/章尾撑满。
         style.paragraphSpacing = 0
-        // 整字格段落保持固定列。只有压缩引号打破整格节奏的段落才让
-        // TextKit 平衡非末行余量；它仍负责避头尾，且不会拉伸段末行。
-        style.alignment = .left
+        // 正文非末行需要填满可用宽度。TextKit 只对真正的非末行启用
+        // justification，段末行仍保持自然收尾；字形自身的 CJK tracking 和
+        // 引号压缩继续由 attributed runs 提供，避免把标点拉成孤立空格。
+        // 这也让避头尾挪动一个标点后，剩余宽度回到同一行，而不是留在行尾。
+        style.alignment = .justified
         style.lineBreakMode = .byWordWrapping
         style.hyphenationFactor = 0
         style.headIndent = 0
@@ -175,7 +177,6 @@ enum ReaderTextLayout {
         for index in 0..<source.length {
             guard let scalar = UnicodeScalar(source.character(at: index)), quotes.contains(scalar),
                   result.attribute(.kern, at: index, effectiveRange: nil) != nil else { continue }
-            style.alignment = .justified
             result.addAttributes([.font: grid.font, .kern: 0, .ligature: 0],
                                  range: NSRange(location: index, length: 1))
             if "’”".unicodeScalars.contains(scalar), index > 0,
@@ -185,8 +186,6 @@ enum ReaderTextLayout {
                                     range: NSRange(location: index - 1, length: 1))
             }
         }
-        result.addAttribute(.paragraphStyle, value: style,
-                            range: NSRange(location: 0, length: result.length))
         if count > 0 {
             // 保留原有的一个分隔字符；显式固定为四分之一字格，避免系统空格宽度漂移。
             var gapAttributes = attrs
